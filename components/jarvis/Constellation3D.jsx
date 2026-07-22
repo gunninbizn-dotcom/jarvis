@@ -29,7 +29,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
 
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' })
     renderer.sortObjects = false
-    renderer.outputColorSpace = THREE.NoColorSpace
+    // Avoid setting NoColorSpace here because Three.js color management can pass it into getPrimaries
     renderer.toneMapping = THREE.NoToneMapping
     renderer.shadowMap.enabled = false
     renderer.setPixelRatio(1)
