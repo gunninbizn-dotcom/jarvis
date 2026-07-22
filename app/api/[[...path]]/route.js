@@ -117,8 +117,8 @@ export async function POST(request, context) {
 
   try {
     let body = {};
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
+    const contentType = request.headers?.get?.('content-type');
+    if (contentType?.startsWith?.('application/json')) {
       const text = await request.text();
       try {
         body = text ? JSON.parse(text) : {};
