@@ -26,7 +26,7 @@ export default function Core3D({ speaking = false }) {
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
     renderer.setSize(width, height)
     mount.appendChild(renderer.domElement)
 
@@ -40,8 +40,8 @@ export default function Core3D({ speaking = false }) {
     const group = new THREE.Group()
     scene.add(group)
 
-    // Outer distortable sphere (using icosahedron high subdivision)
-    const outerGeo = new THREE.IcosahedronGeometry(1.4, 24)
+    // Outer distortable sphere (lower subdivision for better performance)
+    const outerGeo = new THREE.IcosahedronGeometry(1.4, 12)
     // Save original positions for distortion effect
     const basePositions = outerGeo.attributes.position.array.slice()
     const outerMat = new THREE.MeshStandardMaterial({
@@ -70,7 +70,7 @@ export default function Core3D({ speaking = false }) {
 
     // Orbital rings
     function makeRing(r, color, opacity, rot) {
-      const g = new THREE.RingGeometry(r, r + 0.02, 128)
+      const g = new THREE.RingGeometry(r, r + 0.02, 48)
       const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide })
       const mesh = new THREE.Mesh(g, m)
       mesh.rotation.set(...rot)
@@ -82,7 +82,7 @@ export default function Core3D({ speaking = false }) {
     group.add(ring1); group.add(ring2); group.add(ring3)
 
     // Orbiting particles
-    const particleCount = 50
+    const particleCount = 28
     const particleGeo = new THREE.BufferGeometry()
     const positions = new Float32Array(particleCount * 3)
     const particleData = []
@@ -108,7 +108,7 @@ export default function Core3D({ speaking = false }) {
 
     // Starfield background
     const starGeo = new THREE.BufferGeometry()
-    const starCount = 1200
+    const starCount = 600
     const starPos = new Float32Array(starCount * 3)
     for (let i = 0; i < starCount; i++) {
       const r = 20 + Math.random() * 25

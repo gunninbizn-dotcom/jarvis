@@ -18,7 +18,7 @@ export default function Globe3D() {
     camera.position.set(0, 0, 3.6)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
     renderer.setSize(width, height)
     renderer.setClearColor(0x000000, 0)
     mount.appendChild(renderer.domElement)
@@ -40,7 +40,7 @@ export default function Globe3D() {
     group.add(new THREE.Mesh(wireGeo, wireMat))
 
     // Dot points scattered like continents (random distribution, slightly clustered)
-    const dotCount = 380
+    const dotCount = 240
     const dotPos = new Float32Array(dotCount * 3)
     for (let i = 0; i < dotCount; i++) {
       const theta = Math.random() * Math.PI * 2
@@ -82,7 +82,7 @@ export default function Globe3D() {
         mid,
         b.clone().multiplyScalar(1.04)
       )
-      const points = curve.getPoints(50)
+      const points = curve.getPoints(28)
       const geo = new THREE.BufferGeometry().setFromPoints(points)
       const mat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.8 })
       const line = new THREE.Line(geo, mat)
@@ -102,7 +102,7 @@ export default function Globe3D() {
       group.rotation.x = Math.sin(t * 0.1) * 0.15
 
       arcTimer += dt
-      if (arcTimer > 0.6 && arcs.length < 5) {
+      if (arcTimer > 1.2 && arcs.length < 3) {
         const a = cities[Math.floor(Math.random() * cities.length)]
         let b = cities[Math.floor(Math.random() * cities.length)]
         while (b === a) b = cities[Math.floor(Math.random() * cities.length)]

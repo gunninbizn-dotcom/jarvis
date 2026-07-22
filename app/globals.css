@@ -114,3 +114,20 @@ html, body {
   to { stroke-dashoffset: -20; }
 }
 .dash-anim { animation: dashScroll 2s linear infinite; }
+
+@keyframes waveformPulse {
+  0%, 100% { transform: scaleY(0.2); opacity: 0.35; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+.waveform-container {
+  perspective: 400px;
+}
+.waveform-bar {
+  height: 50%;
+  background: linear-gradient(to top, #0891b2, #22d3ee, #67e8f9);
+  box-shadow: 0 0 6px #22d3ee;
+  transform-origin: bottom;
+  animation-name: waveformPulse;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}

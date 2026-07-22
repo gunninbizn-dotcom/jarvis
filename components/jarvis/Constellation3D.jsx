@@ -2,9 +2,6 @@
 
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 
 const PALETTE = [
   new THREE.Color('#00f0ff'), new THREE.Color('#00f0ff'), new THREE.Color('#00f0ff'),
@@ -36,17 +33,11 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     renderer.setClearColor(0x000000, 1)
     mount.appendChild(renderer.domElement)
 
-    const composer = new EffectComposer(renderer)
-    composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
-    composer.addPass(new RenderPass(scene, camera))
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.95, 0.5, 0.0)
-    composer.addPass(bloomPass)
-
     const root = new THREE.Group()
     scene.add(root)
 
     // ------ PARTICLES ------
-    const N = 1500
+    const N = 650
     const positions = new Float32Array(N * 3)
     const colors = new Float32Array(N * 3)
     const baseDir = new Float32Array(N * 3) // unit direction
@@ -105,7 +96,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     for (let ii = 0; ii < shellIndices.length; ii++) {
       const i = shellIndices[ii]
       let count = 0
-      for (let s = 0; s < 30 && count < 3; s++) {
+      for (let s = 0; s < 20 && count < 1; s++) {
         const j = shellIndices[Math.floor(Math.random() * shellIndices.length)]
         if (j === i) continue
         const dxx = positions[i * 3] - positions[j * 3]
@@ -241,8 +232,8 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       const burst = 0.16 * I
       const rippleAmp = 0.08 * I
 
-      // Only update particle positions every other frame OR when intensity is meaningful
-      const needsUpdate = I > 0.02 || frame % 2 === 0
+      // Only update particle positions every few frames or when intensity is meaningful
+      const needsUpdate = I > 0.03 || frame % 4 === 0
       if (needsUpdate) {
         const sinBase = t * 5
         for (let i = 0; i < N; i++) {
@@ -258,7 +249,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
         particleGeo.attributes.position.needsUpdate = true
 
         // Update line positions less often when idle
-        if (I > 0.05 || frame % 4 === 0) {
+        if (I > 0.12 || frame % 12 === 0) {
           for (let k = 0; k < lineCount; k++) {
             const k6 = k * 6
             const a3 = lineIdx[k * 2] * 3
@@ -308,7 +299,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
         }
       }
 
-      composer.render()
+      renderer.render(scene, camera)
       raf = requestAnimationFrame(animate)
     }
     animate()
@@ -319,7 +310,6 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
-      composer.setSize(w, h)
     }
     const ro = new ResizeObserver(onResize)
     ro.observe(mount)
@@ -331,7 +321,6 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       ro.disconnect()
       renderer.dispose()
-      composer.dispose && composer.dispose()
       particleGeo.dispose(); particleMat.dispose()
       lineGeo.dispose(); lineMat.dispose()
       sprite.dispose()
