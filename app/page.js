@@ -167,7 +167,7 @@ function App() {
       if (!flashesRef.current) return
       const colors = [0x00f0ff, 0x00f0ff, 0xffb700, 0xff2a5f]
       flashesRef.current.push({
-        index: Math.floor(Math.random() * 2400),
+        index: Math.floor(Math.random() * 280),
         startTime: performance.now(),
         duration: 1400 + Math.random() * 800,
         color: colors[Math.floor(Math.random() * colors.length)],

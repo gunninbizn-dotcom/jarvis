@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mic, Volume2, Power, VolumeX } from 'lucide-react'
 
@@ -31,28 +31,19 @@ function pickVoice() {
 }
 
 // ------- Listening Visualizer Bars -------
-function VisualizerBars({ mode, intensityRef }) {
-  const [bars, setBars] = useState(() => Array(16).fill(0.1))
-  useEffect(() => {
-    let mounted = true
-    const iv = setInterval(() => {
-      if (!mounted) return
-      const I = intensityRef?.current || 0
-      const base = mode === 'speaking' ? 0.35 + I * 0.6 : mode === 'listening' ? 0.25 + I * 0.5 : 0.08
-      setBars(prev => prev.map(() => Math.max(0.06, base + (Math.random() - 0.5) * 0.35)))
-    }, 90)
-    return () => { mounted = false; clearInterval(iv) }
-  }, [mode, intensityRef])
+function VisualizerBars({ mode }) {
+  const bars = useMemo(() => Array.from({ length: 16 }, (_, index) => ({
+    delay: (index % 6) * 0.08 + index * 0.025,
+    duration: 0.8 + (index % 4) * 0.05,
+  })), [])
   const color = mode === 'speaking' ? '#00f0ff' : mode === 'listening' ? '#ff2a5f' : '#0891b2'
   return (
-    <div className="flex items-end gap-[3px] h-8 w-40">
-      {bars.map((v, i) => (
-        <div key={i} className="w-1 rounded-sm"
+    <div className={`visualizer-bars ${mode}`} style={{ '--visualizer-color': color }}>
+      {bars.map((bar, i) => (
+        <div key={i} className="visualizer-bar"
           style={{
-            height: `${Math.min(100, v * 100)}%`,
-            background: `linear-gradient(to top, ${color}66, ${color})`,
-            boxShadow: `0 0 6px ${color}`,
-            transition: 'height 90ms ease-out',
+            animationDelay: `${bar.delay}s`,
+            animationDuration: `${bar.duration}s`,
           }} />
       ))}
     </div>
@@ -152,7 +143,7 @@ export default function VoiceController({ intensityRef, flashesRef, onCardHighli
     if (!flashesRef?.current) return
     for (let i = 0; i < count; i++) {
       flashesRef.current.push({
-        index: Math.floor(Math.random() * 2400),
+        index: Math.floor(Math.random() * 280),
         startTime: performance.now() + i * 60,
         duration: 1600,
         color,
@@ -336,7 +327,7 @@ export default function VoiceController({ intensityRef, flashesRef, onCardHighli
       <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-3 pointer-events-auto">
         {unmuted && (
           <div className="flex items-center gap-4">
-            <VisualizerBars mode={mode} intensityRef={intensityRef} />
+            <VisualizerBars mode={mode} />
           </div>
         )}
         {!unmuted ? (

@@ -9,7 +9,7 @@ const PALETTE = [
   new THREE.Color('#ffb700'), new THREE.Color('#ffb700'), new THREE.Color('#ff2a5f'),
 ]
 
-const FLASH_POOL_SIZE = 16
+const FLASH_POOL_SIZE = 8
 
 export default function Constellation3D({ onNodeClick, intensityRef, flashesRef }) {
   const mountRef = useRef(null)
@@ -27,8 +27,12 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 200)
     camera.position.set(0, 0, 9)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' })
+    renderer.sortObjects = false
+    renderer.outputColorSpace = THREE.NoColorSpace
+    renderer.toneMapping = THREE.NoToneMapping
+    renderer.shadowMap.enabled = false
+    renderer.setPixelRatio(1)
     renderer.setSize(width, height)
     renderer.setClearColor(0x000000, 1)
     mount.appendChild(renderer.domElement)
@@ -37,7 +41,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     scene.add(root)
 
     // ------ PARTICLES ------
-    const N = 650
+    const N = 180
     const positions = new Float32Array(N * 3)
     const colors = new Float32Array(N * 3)
     const baseDir = new Float32Array(N * 3) // unit direction
@@ -71,7 +75,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
     const spriteCanvas = document.createElement('canvas')
-    spriteCanvas.width = spriteCanvas.height = 64
+    spriteCanvas.width = spriteCanvas.height = 32
     const sctx = spriteCanvas.getContext('2d')
     const grad = sctx.createRadialGradient(32, 32, 0, 32, 32, 32)
     grad.addColorStop(0, 'rgba(255,255,255,1)')
@@ -82,9 +86,9 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const sprite = new THREE.CanvasTexture(spriteCanvas)
 
     const particleMat = new THREE.PointsMaterial({
-      size: 0.09, vertexColors: true, map: sprite,
-      transparent: true, opacity: 0.95, depthWrite: false,
-      blending: THREE.AdditiveBlending, sizeAttenuation: true,
+      size: 0.075, vertexColors: true, map: sprite,
+      transparent: true, opacity: 0.95, depthWrite: false, depthTest: false,
+      blending: THREE.AdditiveBlending, sizeAttenuation: false,
     })
     const particles = new THREE.Points(particleGeo, particleMat)
     root.add(particles)
@@ -93,7 +97,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const lineIdx = [] // flat array [a0,b0, a1,b1, ...]
     const shellIndices = []
     for (let i = 0; i < N; i++) if (baseR[i] > 2.4) shellIndices.push(i)
-    for (let ii = 0; ii < shellIndices.length; ii++) {
+    for (let ii = 0; ii < shellIndices.length && lineIdx.length < 3; ii++) {
       const i = shellIndices[ii]
       let count = 0
       for (let s = 0; s < 20 && count < 1; s++) {
@@ -121,7 +125,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     lineGeo.setAttribute('color', new THREE.BufferAttribute(lineColors, 3))
     const lineMat = new THREE.LineBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.35,
-      blending: THREE.AdditiveBlending, depthWrite: false,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
     })
     const lineSegs = new THREE.LineSegments(lineGeo, lineMat)
     root.add(lineSegs)
@@ -129,7 +133,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     // ------ CENTRAL CORE ------
     const coreGroup = new THREE.Group(); root.add(coreGroup)
     const makeGlow = (r, color, opacity) => {
-      const g = new THREE.SphereGeometry(r, 32, 32)
+      const g = new THREE.SphereGeometry(r, 6, 6)
       const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false })
       return new THREE.Mesh(g, m)
     }
@@ -146,7 +150,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       blending: THREE.AdditiveBlending, depthWrite: false,
     })
     const flashPool = []
-    for (let k = 0; k < FLASH_POOL_SIZE; k++) {
+    for (let k = 0; k < 4; k++) {
       const s = new THREE.Sprite(flashSpriteMat.clone())
       s.scale.setScalar(0.001)
       s.visible = false
@@ -156,6 +160,9 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
 
     // ------ Mouse interaction ------
     const targetRot = { x: 0, y: 0 }
+    const tmpLocal = new THREE.Vector3()
+    const tmpWorld = new THREE.Vector3()
+    const tmpProj = new THREE.Vector3()
     const onMouseMove = (e) => {
       const rect = mount.getBoundingClientRect()
       const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
@@ -183,11 +190,11 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       const hits = raycaster.intersectObject(particles)
       if (hits.length > 0) {
         const idx = hits[0].index
-        const localVec = new THREE.Vector3(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2])
-        const worldVec = localVec.clone().applyMatrix4(root.matrixWorld)
-        const proj = worldVec.clone().project(camera)
-        const sx = (proj.x * 0.5 + 0.5) * rect.width + rect.left
-        const sy = (-proj.y * 0.5 + 0.5) * rect.height + rect.top
+        tmpLocal.set(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2])
+        tmpWorld.copy(tmpLocal).applyMatrix4(root.matrixWorld)
+        tmpProj.copy(tmpWorld).project(camera)
+        const sx = (tmpProj.x * 0.5 + 0.5) * rect.width + rect.left
+        const sy = (-tmpProj.y * 0.5 + 0.5) * rect.height + rect.top
         // Trigger a flash on click
         if (flashesRef && flashesRef.current) {
           flashesRef.current.push({
@@ -233,7 +240,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       const rippleAmp = 0.08 * I
 
       // Only update particle positions every few frames or when intensity is meaningful
-      const needsUpdate = I > 0.03 || frame % 4 === 0
+      const needsUpdate = I > 0.04 || frame % 10 === 0
       if (needsUpdate) {
         const sinBase = t * 5
         for (let i = 0; i < N; i++) {
@@ -249,7 +256,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
         particleGeo.attributes.position.needsUpdate = true
 
         // Update line positions less often when idle
-        if (I > 0.12 || frame % 12 === 0) {
+        if (I > 0.18 || frame % 48 === 0) {
           for (let k = 0; k < lineCount; k++) {
             const k6 = k * 6
             const a3 = lineIdx[k * 2] * 3

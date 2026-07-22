@@ -131,3 +131,25 @@ html, body {
   animation-iteration-count: infinite;
   animation-timing-function: ease-in-out;
 }
+.visualizer-bars {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(2px, 1fr));
+  align-items: end;
+  gap: 3px;
+  width: 10rem;
+  height: 2rem;
+}
+.visualizer-bar {
+  width: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(to top, var(--visualizer-color, #00f0ff)22, var(--visualizer-color, #00f0ff));
+  box-shadow: 0 0 6px var(--visualizer-color, #00f0ff);
+  transform-origin: bottom;
+  animation-name: visualizerPulse;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+@keyframes visualizerPulse {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.35; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
