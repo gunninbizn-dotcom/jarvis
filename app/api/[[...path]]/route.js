@@ -71,8 +71,8 @@ function jarvisRespond(input) {
 
 export const runtime = 'nodejs';
 
-export async function GET(request, context) {
-  const p = context?.params?.path ?? [];
+export async function GET(request, { params }) {
+  const p = params?.path ?? [];
   const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
@@ -111,20 +111,17 @@ export async function GET(request, context) {
   }
 }
 
-export async function POST(request, context) {
-  const p = context?.params?.path ?? [];
+export async function POST(request, { params }) {
+  const p = params?.path ?? [];
   const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
     let body = {};
-    const contentType = request.headers?.get?.('content-type');
-    if (contentType?.startsWith?.('application/json')) {
-      const text = await request.text();
-      try {
-        body = text ? JSON.parse(text) : {};
-      } catch {
-        body = {};
-      }
+
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
     }
 
     if (route === 'chat') {
