@@ -5,16 +5,20 @@ import { v4 as uuidv4 } from 'uuid';
 const uri = process.env.MONGO_URL;
 const dbName = process.env.DB_NAME || 'jarvis_db';
 
-let client;
 let clientPromise;
 
-if (!global._mongoClientPromise) {
-  client = new MongoClient(uri);
-  global._mongoClientPromise = client.connect();
+if (uri) {
+  if (!global._mongoClientPromise) {
+    const client = new MongoClient(uri);
+    global._mongoClientPromise = client.connect();
+  }
+  clientPromise = global._mongoClientPromise;
 }
-clientPromise = global._mongoClientPromise;
 
 async function getDb() {
+  if (!clientPromise) {
+    throw new Error('MongoDB is not configured. Set MONGO_URL to enable DB-backed logs.');
+  }
   const c = await clientPromise;
   return c.db(dbName);
 }
@@ -65,9 +69,11 @@ function jarvisRespond(input) {
   return witty[Math.floor(Math.random() * witty.length)];
 }
 
-export async function GET(request, { params }) {
-  const p = (await params).path || [];
-  const route = p.join('/');
+export const runtime = 'nodejs';
+
+export async function GET(request, context) {
+  const p = context?.params?.path ?? [];
+  const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
     if (!route) {
@@ -91,6 +97,9 @@ export async function GET(request, { params }) {
     }
 
     if (route === 'logs') {
+      if (!clientPromise) {
+        return NextResponse.json({ logs: [] }, { headers: CORS });
+      }
       const db = await getDb();
       const logs = await db.collection('jarvis_logs').find({}).sort({ ts: -1 }).limit(50).toArray();
       return NextResponse.json({ logs: logs.map(l => ({ ...l, _id: undefined })) }, { headers: CORS });
@@ -102,26 +111,37 @@ export async function GET(request, { params }) {
   }
 }
 
-export async function POST(request, { params }) {
-  const p = (await params).path || [];
-  const route = p.join('/');
+export async function POST(request, context) {
+  const p = context?.params?.path ?? [];
+  const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
-    const body = await request.json().catch(() => ({}));
+    let body = {};
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const text = await request.text();
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = {};
+      }
+    }
 
     if (route === 'chat') {
       const { message, sessionId } = body;
       const sid = sessionId || uuidv4();
       const reply = jarvisRespond(message);
 
-      const db = await getDb();
-      await db.collection('jarvis_logs').insertOne({
-        id: uuidv4(),
-        sessionId: sid,
-        user: message,
-        jarvis: reply,
-        ts: new Date(),
-      });
+      if (clientPromise) {
+        const db = await getDb();
+        await db.collection('jarvis_logs').insertOne({
+          id: uuidv4(),
+          sessionId: sid,
+          user: message,
+          jarvis: reply,
+          ts: new Date(),
+        });
+      }
 
       return NextResponse.json({ reply, sessionId: sid, timestamp: new Date().toISOString() }, { headers: CORS });
     }
