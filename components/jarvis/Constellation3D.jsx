@@ -30,22 +30,23 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 200)
     camera.position.set(0, 0, 9)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
     renderer.setSize(width, height)
     renderer.setClearColor(0x000000, 1)
     mount.appendChild(renderer.domElement)
 
     const composer = new EffectComposer(renderer)
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
     composer.addPass(new RenderPass(scene, camera))
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.15, 0.6, 0.0)
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.95, 0.5, 0.0)
     composer.addPass(bloomPass)
 
     const root = new THREE.Group()
     scene.add(root)
 
     // ------ PARTICLES ------
-    const N = 2400
+    const N = 1500
     const positions = new Float32Array(N * 3)
     const colors = new Float32Array(N * 3)
     const baseDir = new Float32Array(N * 3) // unit direction
@@ -219,6 +220,7 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const clock = new THREE.Clock()
     let smoothedIntensity = 0
     let rotVelY = 0
+    let frame = 0
 
     const animate = () => {
       const t = clock.getElapsedTime()
@@ -226,42 +228,53 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       const rawIntensity = intensityRef?.current || 0
       smoothedIntensity += (rawIntensity - smoothedIntensity) * 0.15
       const I = smoothedIntensity
+      frame++
 
-      // Rotation: base slow + intensity boost, with easing (inertia)
+      // Rotation with inertia
       const targetVelY = 0.08 + I * 0.6
       rotVelY += (targetVelY - rotVelY) * 0.05
       root.rotation.y += rotVelY * dt
       root.rotation.x += (targetRot.x - root.rotation.x) * 0.03
-      root.rotation.y += (targetRot.y * 0.15 - (root.rotation.y - t * 0)) * 0.001 // subtle mouse influence
 
-      // Idle breathing (4s period): scale factor applied inside particle radius as well
+      // Idle breathing (4s period)
       const breath = 1 + 0.025 * Math.sin(t * (Math.PI / 2))
-      // Outward burst amount
       const burst = 0.16 * I
-      // Ripple amplitude
       const rippleAmp = 0.08 * I
 
-      // Update particle positions
-      for (let i = 0; i < N; i++) {
-        const dx = baseDir[i * 3], dy = baseDir[i * 3 + 1], dz = baseDir[i * 3 + 2]
-        const bR = baseR[i]
-        const ripple = rippleAmp * Math.sin(bR * 2.5 - t * 5 + phase[i])
-        const r = bR * (breath + burst + ripple * 0.6)
-        positions[i * 3] = dx * r
-        positions[i * 3 + 1] = dy * r
-        positions[i * 3 + 2] = dz * r
-      }
-      particleGeo.attributes.position.needsUpdate = true
+      // Only update particle positions every other frame OR when intensity is meaningful
+      const needsUpdate = I > 0.02 || frame % 2 === 0
+      if (needsUpdate) {
+        const sinBase = t * 5
+        for (let i = 0; i < N; i++) {
+          const i3 = i * 3
+          const dx = baseDir[i3], dy = baseDir[i3 + 1], dz = baseDir[i3 + 2]
+          const bR = baseR[i]
+          const ripple = rippleAmp > 0.001 ? rippleAmp * Math.sin(bR * 2.5 - sinBase + phase[i]) : 0
+          const r = bR * (breath + burst + ripple * 0.6)
+          positions[i3] = dx * r
+          positions[i3 + 1] = dy * r
+          positions[i3 + 2] = dz * r
+        }
+        particleGeo.attributes.position.needsUpdate = true
 
-      // Update line positions from current particles
-      for (let k = 0; k < lineCount; k++) {
-        const a = lineIdx[k * 2], b = lineIdx[k * 2 + 1]
-        linePositions[k * 6] = positions[a * 3];     linePositions[k * 6 + 1] = positions[a * 3 + 1]; linePositions[k * 6 + 2] = positions[a * 3 + 2]
-        linePositions[k * 6 + 3] = positions[b * 3]; linePositions[k * 6 + 4] = positions[b * 3 + 1]; linePositions[k * 6 + 5] = positions[b * 3 + 2]
+        // Update line positions less often when idle
+        if (I > 0.05 || frame % 4 === 0) {
+          for (let k = 0; k < lineCount; k++) {
+            const k6 = k * 6
+            const a3 = lineIdx[k * 2] * 3
+            const b3 = lineIdx[k * 2 + 1] * 3
+            linePositions[k6]     = positions[a3]
+            linePositions[k6 + 1] = positions[a3 + 1]
+            linePositions[k6 + 2] = positions[a3 + 2]
+            linePositions[k6 + 3] = positions[b3]
+            linePositions[k6 + 4] = positions[b3 + 1]
+            linePositions[k6 + 5] = positions[b3 + 2]
+          }
+          lineGeo.attributes.position.needsUpdate = true
+        }
       }
-      lineGeo.attributes.position.needsUpdate = true
 
-      // Core pulse (breath + intensity)
+      // Core pulse
       const corePulse = breath + I * 0.3
       core1.scale.setScalar(corePulse * (1 + Math.sin(t * 2.2) * 0.05))
       core2.scale.setScalar(corePulse * (1 + Math.sin(t * 1.6) * 0.12))
@@ -273,11 +286,9 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       // Live-event flashes
       const now = performance.now()
       const active = flashesRef?.current || []
-      // Prune old
       for (let a = active.length - 1; a >= 0; a--) {
         if (now - active[a].startTime > active[a].duration) active.splice(a, 1)
       }
-      // Assign to pool
       for (let k = 0; k < flashPool.length; k++) {
         const slot = flashPool[k]
         if (k < active.length) {
@@ -287,7 +298,6 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
           const idx = f.index
           slot.sprite.position.set(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2])
           slot.sprite.material.color.setHex(f.color || 0xffffff)
-          // Grow then fade
           const ease = life < 0.35 ? life / 0.35 : 1
           const fade = life < 0.35 ? 1 : 1 - (life - 0.35) / 0.65
           slot.sprite.scale.setScalar((f.size || 0.35) * (0.4 + ease * 1.8))

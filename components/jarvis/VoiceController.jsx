@@ -32,17 +32,16 @@ function pickVoice() {
 
 // ------- Listening Visualizer Bars -------
 function VisualizerBars({ mode, intensityRef }) {
-  const [bars, setBars] = useState(() => Array(20).fill(0.1))
+  const [bars, setBars] = useState(() => Array(16).fill(0.1))
   useEffect(() => {
-    let raf
-    const tick = () => {
+    let mounted = true
+    const iv = setInterval(() => {
+      if (!mounted) return
       const I = intensityRef?.current || 0
       const base = mode === 'speaking' ? 0.35 + I * 0.6 : mode === 'listening' ? 0.25 + I * 0.5 : 0.08
       setBars(prev => prev.map(() => Math.max(0.06, base + (Math.random() - 0.5) * 0.35)))
-      raf = requestAnimationFrame(() => setTimeout(() => (raf = requestAnimationFrame(tick)), 60))
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    }, 90)
+    return () => { mounted = false; clearInterval(iv) }
   }, [mode, intensityRef])
   const color = mode === 'speaking' ? '#00f0ff' : mode === 'listening' ? '#ff2a5f' : '#0891b2'
   return (
@@ -53,7 +52,7 @@ function VisualizerBars({ mode, intensityRef }) {
             height: `${Math.min(100, v * 100)}%`,
             background: `linear-gradient(to top, ${color}66, ${color})`,
             boxShadow: `0 0 6px ${color}`,
-            transition: 'height 60ms ease-out',
+            transition: 'height 90ms ease-out',
           }} />
       ))}
     </div>
