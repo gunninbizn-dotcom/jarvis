@@ -1,472 +1,248 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { motion, AnimatePresence } from 'framer-motion'
-import {
-  Activity, Zap, Radio, Cpu, Shield, Satellite, Thermometer,
-  Send, Power, Mic, Wifi, Clock, Globe, AlertTriangle, Lock, Radar as RadarIcon
-} from 'lucide-react'
-import Radar from '@/components/jarvis/Radar'
-import Waveform from '@/components/jarvis/Waveform'
-import StatPanel from '@/components/jarvis/StatPanel'
-import BootSequence from '@/components/jarvis/BootSequence'
-import MissionFeed from '@/components/jarvis/MissionFeed'
-import MiniCalendar from '@/components/jarvis/MiniCalendar'
+import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 
-const Core3D = dynamic(() => import('@/components/jarvis/Core3D'), { ssr: false })
-const Globe3D = dynamic(() => import('@/components/jarvis/Globe3D'), { ssr: false })
+const Constellation3D = dynamic(() => import('@/components/jarvis/Constellation3D'), { ssr: false })
 
-function Clockface() {
-  const [now, setNow] = useState(new Date())
+// -------- Callout Card --------
+function Callout({ style, label, value, sub, accent = 'cyan', anchor, connectorFrom }) {
+  const colors = {
+    cyan:  { border: 'border-cyan-400', text: 'text-cyan-300', glow: 'glow-cyan' },
+    amber: { border: 'border-amber-400', text: 'text-amber-300', glow: 'glow-amber' },
+    red:   { border: 'border-red-500', text: 'text-red-300', glow: 'glow-red' },
+  }
+  const c = colors[accent] || colors.cyan
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ delay: 0.6, duration: 0.7 }}
+      className={`absolute z-20 pointer-events-none`}
+      style={style}
+    >
+      <div className={`corner-brackets ${c.glow} bg-black/50 backdrop-blur-sm border ${c.border} px-3 py-2 min-w-[190px]`}>
+        <span className="cb-tr" /><span className="cb-bl" />
+        <div className={`text-[9px] uppercase tracking-[0.25em] ${c.text} opacity-80`}>{label}</div>
+        <div className={`font-display text-2xl font-bold ${c.text} text-glow-sm leading-tight`}>{value}</div>
+        {sub && <div className="text-[9px] uppercase tracking-widest text-cyan-500/70 mt-0.5">{sub}</div>}
+      </div>
+    </motion.div>
+  )
+}
+
+// -------- Connector lines from cards to sphere center --------
+function Connectors({ items, centerX = '50%', centerY = '50%' }) {
+  return (
+    <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" style={{ overflow: 'visible' }}>
+      <defs>
+        <linearGradient id="connGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#00f0ff" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#00f0ff" stopOpacity="0.1" />
+        </linearGradient>
+      </defs>
+      {items.map((it, i) => (
+        <g key={i}>
+          <line
+            x1={it.x} y1={it.y}
+            x2={it.tx} y2={it.ty}
+            stroke={it.color || '#00f0ff'}
+            strokeWidth="1"
+            strokeDasharray="3 3"
+            opacity="0.6"
+            className="dash-anim"
+          />
+          {/* End dot on sphere side */}
+          <circle cx={it.tx} cy={it.ty} r="3" fill={it.color || '#00f0ff'}>
+            <animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="1;0.3;1" dur="1.6s" repeatCount="indefinite" />
+          </circle>
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+// -------- Terminal Feed --------
+const FEED_LINES = [
+  'Overnight 1,142 people visited your website. Your automation handled 206 conversations without hesitation.',
+  '19 inappropriate comments were auto-filtered before reaching human moderation queues.',
+  'Detected 4 high-intent leads. Revenue opportunity forecasted at $1,710 for the next 24 hours.',
+  'Neural cortex synchronized. Attention layer weights re-calibrated. Sentiment index: 0.87 positive.',
+  'Standing by for your directive, Sir. All subsystems nominal. Awaiting further input.',
+]
+
+function TerminalFeed() {
+  const [lineIndex, setLineIndex] = useState(0)
+  const [displayed, setDisplayed] = useState('')
+
   useEffect(() => {
-    const i = setInterval(() => setNow(new Date()), 1000)
+    let charIndex = 0
+    const current = FEED_LINES[lineIndex]
+    setDisplayed('')
+    const typer = setInterval(() => {
+      charIndex++
+      setDisplayed(current.slice(0, charIndex))
+      if (charIndex >= current.length) {
+        clearInterval(typer)
+        setTimeout(() => setLineIndex((lineIndex + 1) % FEED_LINES.length), 3200)
+      }
+    }, 22)
+    return () => clearInterval(typer)
+  }, [lineIndex])
+
+  return (
+    <div className="corner-brackets bg-black/60 backdrop-blur-sm border border-cyan-500/50 px-5 py-3">
+      <span className="cb-tr" /><span className="cb-bl" />
+      <div className="flex items-baseline gap-3">
+        <span className="text-[10px] uppercase tracking-[0.3em] text-cyan-400/70 font-display shrink-0">SYS.LOG</span>
+        <span className="text-cyan-100 text-sm md:text-base leading-relaxed caret">{displayed}</span>
+      </div>
+    </div>
+  )
+}
+
+// -------- Live Clock --------
+function LiveClock() {
+  const [t, setT] = useState(null)
+  useEffect(() => {
+    setT(new Date())
+    const i = setInterval(() => setT(new Date()), 1000)
     return () => clearInterval(i)
   }, [])
+  if (!t) return <div className="text-right"><div className="font-display text-lg text-cyan-300 text-glow-sm tracking-widest">--:--:--</div><div className="text-[9px] uppercase tracking-[0.3em] text-cyan-500/70">&nbsp;</div></div>
   return (
     <div className="text-right">
-      <div className="font-display text-2xl md:text-3xl text-cyan-300 text-glow tracking-widest">
-        {now.toLocaleTimeString('en-US', { hour12: false })}
+      <div className="font-display text-lg text-cyan-300 text-glow-sm tracking-widest">
+        {t.toLocaleTimeString('en-US', { hour12: false })}
       </div>
-      <div className="text-[10px] uppercase tracking-[0.3em] text-cyan-500/80">
-        {now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: '2-digit', year: 'numeric' })}
+      <div className="text-[9px] uppercase tracking-[0.3em] text-cyan-500/70">
+        {t.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}
       </div>
-    </div>
-  )
-}
-
-function HUDPanel({ title, icon: Icon, children, className = '' }) {
-  return (
-    <div className={`hud-frame p-3 ${className}`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-cyan-400">
-          {Icon && <Icon className="w-3.5 h-3.5" />}
-          <span className="text-[10px] uppercase tracking-[0.25em] font-display">{title}</span>
-        </div>
-        <div className="flex gap-1">
-          <div className="w-1 h-1 rounded-full bg-cyan-400 blink" />
-          <div className="w-1 h-1 rounded-full bg-cyan-600" />
-        </div>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function DataStream() {
-  const chars = 'ABCDEF0123456789█▓▒░'.split('')
-  const [rows, setRows] = useState([])
-  useEffect(() => {
-    const gen = () => {
-      setRows(Array.from({ length: 8 }, () =>
-        Array.from({ length: 22 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-      ))
-    }
-    gen()
-    const i = setInterval(gen, 150)
-    return () => clearInterval(i)
-  }, [])
-  return (
-    <div className="font-mono text-[10px] leading-[1.1] text-cyan-500/80 space-y-0.5">
-      {rows.map((r, i) => (
-        <div key={i} className="truncate">{r}</div>
-      ))}
     </div>
   )
 }
 
 function App() {
-  const [booted, setBooted] = useState(false)
-  const [telemetry, setTelemetry] = useState({
-    cpu: 42, memory: 61, network: 850, power: 92, threats: 0, temp: 36, satellites: 11,
-  })
-  const [messages, setMessages] = useState([
-    { role: 'jarvis', text: 'Good evening, Sir. All systems are operational and awaiting your command.' },
-  ])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const [speaking, setSpeaking] = useState(false)
-  const [listening, setListening] = useState(false)
-  const recognitionRef = useRef(null)
-  const sessionIdRef = useRef(null)
-  const chatEndRef = useRef(null)
-
-  // Poll telemetry
-  useEffect(() => {
-    if (!booted) return
-    const fetchTel = async () => {
-      try {
-        const r = await fetch('/api/status')
-        const d = await r.json()
-        setTelemetry(d)
-      } catch {}
-    }
-    fetchTel()
-    const i = setInterval(fetchTel, 2500)
-    return () => clearInterval(i)
-  }, [booted])
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  const send = async () => {
-    const text = input.trim()
-    if (!text || sending) return
-    setInput('')
-    setMessages(m => [...m, { role: 'user', text }])
-    setSending(true)
-    setSpeaking(true)
-    try {
-      const r = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId: sessionIdRef.current }),
-      })
-      const d = await r.json()
-      sessionIdRef.current = d.sessionId
-      // Simulate typing
-      await new Promise(res => setTimeout(res, 500))
-      setMessages(m => [...m, { role: 'jarvis', text: d.reply }])
-      // Try to speak using browser TTS
-      try {
-        if (typeof window !== 'undefined' && window.speechSynthesis) {
-          const u = new SpeechSynthesisUtterance(d.reply)
-          u.rate = 1
-          u.pitch = 0.85
-          u.volume = 0.9
-          const voices = window.speechSynthesis.getVoices()
-          const brit = voices.find(v => /uk|british|daniel|arthur/i.test(v.name + v.lang))
-          if (brit) u.voice = brit
-          u.onend = () => setSpeaking(false)
-          window.speechSynthesis.speak(u)
-        } else { setSpeaking(false) }
-      } catch { setSpeaking(false) }
-    } catch (e) {
-      setMessages(m => [...m, { role: 'jarvis', text: 'Connection to core disrupted. Retrying...' }])
-      setSpeaking(false)
-    } finally {
-      setSending(false)
-    }
-  }
-
-  const quickCmds = ['System status', 'Radar scan', 'Weather report', 'Tell me a joke', 'Who are you?']
-
-  // Voice recognition
-  const startListening = () => {
-    if (typeof window === 'undefined') return
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) {
-      setMessages(m => [...m, { role: 'jarvis', text: 'Voice input is not supported in this browser, Sir. Try Chrome or Edge.' }])
-      return
-    }
-    try { window.speechSynthesis?.cancel() } catch {}
-    const rec = new SR()
-    rec.lang = 'en-US'
-    rec.interimResults = true
-    rec.continuous = false
-    let finalText = ''
-    let started = false
-    let startTimer = null
-    const showUnavailable = (reason) => {
-      const msg = reason === 'not-allowed' || reason === 'permission-denied'
-        ? 'Microphone permission is blocked, Sir. Please allow microphone access in your browser settings.'
-        : 'Voice input is unavailable in this environment, Sir. Try opening the app in Chrome or Edge with microphone permission granted.'
-      setMessages(m => [...m, { role: 'jarvis', text: msg }])
-    }
-    rec.onstart = () => {
-      started = true
-      if (startTimer) { clearTimeout(startTimer); startTimer = null }
-      setListening(true)
-    }
-    rec.onresult = (e) => {
-      let interim = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i]
-        if (r.isFinal) finalText += r[0].transcript
-        else interim += r[0].transcript
-      }
-      setInput((finalText || interim).trim())
-    }
-    rec.onerror = (e) => {
-      setListening(false)
-      if (startTimer) { clearTimeout(startTimer); startTimer = null }
-      showUnavailable(e?.error)
-    }
-    rec.onend = () => {
-      setListening(false)
-      if (startTimer) { clearTimeout(startTimer); startTimer = null }
-      const t = (finalText || '').trim()
-      if (t) { setInput(t); setTimeout(send, 100) }
-    }
-    recognitionRef.current = rec
-    try {
-      rec.start()
-      // If onstart never fires within 1.5s, surface a fallback message
-      startTimer = setTimeout(() => {
-        if (!started) {
-          setListening(false)
-          showUnavailable()
-          try { rec.abort && rec.abort() } catch {}
-        }
-      }, 1500)
-    } catch (err) {
-      setListening(false)
-      showUnavailable(err?.name)
-    }
-  }
-
-  const stopListening = () => {
-    try { recognitionRef.current?.stop() } catch {}
-    setListening(false)
-  }
-
   return (
-    <div className="min-h-screen w-full bg-black text-cyan-100 relative overflow-hidden scanlines crt">
-      {!booted && <BootSequence onDone={() => setBooted(true)} />}
+    <div className="fixed inset-0 w-screen h-screen bg-black text-cyan-100 overflow-hidden vignette">
+      {/* Grid background */}
+      <div className="absolute inset-0 hud-grid pointer-events-none" />
 
-      {/* Ambient background grid */}
-      <div className="fixed inset-0 opacity-30 pointer-events-none"
-        style={{
-          backgroundImage: 'linear-gradient(rgba(34,211,238,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.08) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-        }} />
+      {/* 3D Constellation Canvas */}
+      <div className="absolute inset-0">
+        <Constellation3D />
+      </div>
 
-      <AnimatePresence>
-        {booted && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.8 }}
-            className="relative z-10"
-          >
-            {/* Top Bar */}
-            <div className="px-4 md:px-8 pt-4 pb-3 border-b border-cyan-500/20 flex items-center justify-between backdrop-blur-sm bg-black/40">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full border-2 border-cyan-400 flex items-center justify-center pulse-glow">
-                  <Zap className="w-4 h-4 text-cyan-300" />
-                </div>
-                <div>
-                  <div className="font-display text-xl text-cyan-300 text-glow tracking-[0.3em] glitch">J.A.R.V.I.S.</div>
-                  <div className="text-[9px] uppercase tracking-[0.3em] text-cyan-500/70">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
-                </div>
-              </div>
+      {/* ============ HUD OVERLAY ============ */}
 
-              <div className="hidden md:flex items-center gap-6 text-[10px] uppercase tracking-widest">
-                <div className="flex items-center gap-1.5">
-                  <Wifi className="w-3 h-3 text-emerald-400" />
-                  <span className="text-emerald-400">UPLINK</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Lock className="w-3 h-3 text-cyan-400" />
-                  <span className="text-cyan-400">SECURE</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Satellite className="w-3 h-3 text-cyan-400" />
-                  <span className="text-cyan-400">SAT × {telemetry.satellites || 11}</span>
-                </div>
-              </div>
+      {/* TOP LEFT — Brand */}
+      <motion.div
+        initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.7 }}
+        className="absolute top-6 left-6 z-30"
+      >
+        <div className="flex items-center gap-3">
+          <div className="font-display text-2xl md:text-3xl font-bold text-cyan-300 text-glow tracking-[0.35em]">
+            R.A.D.A.R.
+          </div>
+        </div>
+        <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-cyan-400/80">
+          <span className="relative inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 text-emerald-400 ping-dot" />
+          <span>System Online</span>
+          <span className="text-cyan-700">|</span>
+          <span className="text-cyan-500">Neural Core v3.14</span>
+        </div>
+      </motion.div>
 
-              <Clockface />
-            </div>
+      {/* TOP RIGHT — Status badges + clock */}
+      <motion.div
+        initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.7, delay: 0.1 }}
+        className="absolute top-6 right-6 z-30 flex flex-col items-end gap-3"
+      >
+        <div className="flex flex-wrap justify-end gap-2">
+          <div className="corner-brackets bg-red-500/10 border border-red-500/70 glow-red px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-red-300 font-display">
+            <span className="cb-tr" /><span className="cb-bl" />
+            [ Overnight Summary ]
+          </div>
+          <div className="corner-brackets bg-amber-500/10 border border-amber-400/70 glow-amber px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-amber-300 font-display">
+            <span className="cb-tr" /><span className="cb-bl" />
+            [ Automation Active ]
+          </div>
+          <div className="corner-brackets bg-cyan-500/10 border border-cyan-400/70 glow-cyan px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-cyan-300 font-display">
+            <span className="cb-tr" /><span className="cb-bl" />
+            [ Uplink Secure ]
+          </div>
+        </div>
+        <LiveClock />
+      </motion.div>
 
-            {/* Main grid */}
-            <div className="grid grid-cols-12 gap-4 p-4 md:p-6">
-              {/* LEFT COLUMN */}
-              <div className="col-span-12 lg:col-span-3 space-y-4">
-                <HUDPanel title="System Vitals" icon={Cpu}>
-                  <div className="space-y-3">
-                    <StatPanel label="CPU Load" value={telemetry.cpu?.toFixed(1)} unit="%" percent={telemetry.cpu} />
-                    <StatPanel label="Memory" value={telemetry.memory?.toFixed(1)} unit="%" percent={telemetry.memory} />
-                    <StatPanel label="Network" value={telemetry.network?.toFixed(0)} unit="MB/s" percent={(telemetry.network / 1200) * 100} color="green" />
-                    <StatPanel label="Core Temp" value={telemetry.temp?.toFixed(1)} unit="°C" percent={(telemetry.temp / 100) * 100} color="amber" />
-                  </div>
-                </HUDPanel>
+      {/* CONNECTOR LINES (SVG) */}
+      <Connectors
+        items={[
+          // Card corner -> sphere edge
+          { x: '17%', y: '32%', tx: '43%', ty: '42%', color: '#00f0ff' },   // Top-left card
+          { x: '84%', y: '28%', tx: '58%', ty: '40%', color: '#ffb700' },  // Top-right card
+          { x: '15%', y: '68%', tx: '42%', ty: '58%', color: '#ff2a5f' }, // Bottom-left card
+          { x: '86%', y: '72%', tx: '58%', ty: '60%', color: '#00f0ff' }, // Bottom-right card
+        ]}
+      />
 
-                <HUDPanel title="Arc Reactor" icon={Zap}>
-                  <div className="flex items-center justify-center py-2">
-                    <div className="relative w-32 h-32">
-                      <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-                        <circle cx="50" cy="50" r="45" stroke="rgba(34,211,238,0.15)" strokeWidth="4" fill="none" />
-                        <circle cx="50" cy="50" r="45" stroke="#22d3ee" strokeWidth="4" fill="none"
-                          strokeDasharray={2 * Math.PI * 45}
-                          strokeDashoffset={2 * Math.PI * 45 * (1 - (telemetry.power || 92) / 100)}
-                          strokeLinecap="round"
-                          style={{ filter: 'drop-shadow(0 0 8px #22d3ee)', transition: 'stroke-dashoffset 0.8s ease' }} />
-                      </svg>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <div className="font-display text-3xl text-cyan-300 text-glow font-bold">{(telemetry.power || 92).toFixed(0)}</div>
-                        <div className="text-[9px] uppercase tracking-widest text-cyan-500">Output %</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-center text-[10px] text-cyan-500 uppercase tracking-widest mt-1">Palladium: Stable</div>
-                </HUDPanel>
+      {/* FLOATING CALLOUT CARDS */}
+      <Callout
+        style={{ top: '26%', left: '4%' }}
+        label="Site Visits"
+        value="1,142"
+        sub="▲ 12.4% vs. yesterday"
+        accent="cyan"
+      />
+      <Callout
+        style={{ top: '22%', right: '4%' }}
+        label="Conversations Handled"
+        value="206"
+        sub="Automation · 24hr"
+        accent="amber"
+      />
+      <Callout
+        style={{ bottom: '20%', left: '4%' }}
+        label="Comments Filtered"
+        value="19"
+        sub="Inappropriate · auto-removed"
+        accent="red"
+      />
+      <Callout
+        style={{ bottom: '16%', right: '4%' }}
+        label="Revenue Opportunity"
+        value="$1,710"
+        sub="Forecast · 24hr"
+        accent="cyan"
+      />
 
-                <HUDPanel title="Tactical Calendar" icon={Clock}>
-                  <MiniCalendar />
-                </HUDPanel>
-              </div>
+      {/* BOTTOM — Terminal Feed */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, delay: 0.4 }}
+        className="absolute bottom-6 left-6 right-6 z-30 max-w-5xl mx-auto"
+      >
+        <TerminalFeed />
+      </motion.div>
 
-              {/* CENTER COLUMN */}
-              <div className="col-span-12 lg:col-span-6 space-y-4">
-                <div className="hud-frame relative h-[420px] md:h-[500px] overflow-hidden">
-                  <div className="absolute top-3 left-3 z-10 flex items-center gap-2 text-cyan-400">
-                    <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] font-display">Neural Core Online</span>
-                  </div>
-                  <div className="absolute top-3 right-3 z-10 text-right">
-                    <div className="text-[10px] uppercase tracking-widest text-cyan-500">Threat Level</div>
-                    <div className="font-display text-lg font-bold text-emerald-400 text-glow">MINIMAL</div>
-                  </div>
-                  <div className="absolute inset-0">
-                    <Core3D speaking={speaking} />
-                  </div>
-                  <div className="absolute bottom-3 left-3 right-3 z-10">
-                    <Waveform active={speaking} />
-                  </div>
-                </div>
+      {/* CORNER TICKS (top-left / top-right etc as HUD flair) */}
+      <div className="absolute top-3 left-3 w-6 h-6 border-l-2 border-t-2 border-cyan-400/60 z-30 pointer-events-none" />
+      <div className="absolute top-3 right-3 w-6 h-6 border-r-2 border-t-2 border-cyan-400/60 z-30 pointer-events-none" />
+      <div className="absolute bottom-3 left-3 w-6 h-6 border-l-2 border-b-2 border-cyan-400/60 z-30 pointer-events-none" />
+      <div className="absolute bottom-3 right-3 w-6 h-6 border-r-2 border-b-2 border-cyan-400/60 z-30 pointer-events-none" />
 
-                {/* Chat / Command console */}
-                <div className="hud-frame p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2 text-cyan-400">
-                      <Radio className="w-3.5 h-3.5" />
-                      <span className="text-[10px] uppercase tracking-[0.25em] font-display">Command Console</span>
-                    </div>
-                    <span className="text-[10px] text-cyan-500/70 uppercase tracking-widest">Session Active</span>
-                  </div>
-
-                  <div className="h-48 overflow-y-auto space-y-2 pr-2 mb-3 text-sm">
-                    {messages.map((m, i) => (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                      >
-                        {m.role === 'jarvis' && (
-                          <span className="text-cyan-500 text-[10px] mt-1 font-display">JARVIS &gt;</span>
-                        )}
-                        <div className={`max-w-[85%] px-3 py-2 rounded-sm ${
-                          m.role === 'user'
-                            ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-100'
-                            : 'bg-black/40 border border-cyan-500/30 text-cyan-200 text-glow-sm'
-                        }`}>
-                          {m.text}
-                        </div>
-                        {m.role === 'user' && (
-                          <span className="text-cyan-500 text-[10px] mt-1 font-display">&lt; SIR</span>
-                        )}
-                      </motion.div>
-                    ))}
-                    {sending && (
-                      <div className="flex items-center gap-2 text-cyan-400 text-xs">
-                        <span className="text-cyan-500 font-display">JARVIS &gt;</span>
-                        <span className="flex gap-1">
-                          <span className="w-1 h-1 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-1 h-1 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-1 h-1 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                        </span>
-                      </div>
-                    )}
-                    <div ref={chatEndRef} />
-                  </div>
-
-                  {/* Quick commands */}
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {quickCmds.map(q => (
-                      <button key={q}
-                        onClick={() => { setInput(q); setTimeout(send, 50) }}
-                        className="text-[10px] uppercase tracking-widest px-2 py-1 border border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/15 hover:text-cyan-200 transition rounded-sm">
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-cyan-500 font-display text-sm">&gt;</span>
-                    <input
-                      value={input}
-                      onChange={e => setInput(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && send()}
-                      placeholder={listening ? 'Listening...' : 'Speak, Sir...'}
-                      className="flex-1 bg-black/40 border border-cyan-500/30 focus:border-cyan-400 outline-none px-3 py-2 text-sm text-cyan-100 rounded-sm placeholder:text-cyan-700 tracking-wide"
-                    />
-                    <button
-                      onClick={listening ? stopListening : startListening}
-                      className={`px-3 py-2 border rounded-sm transition flex items-center gap-2 ${
-                        listening
-                          ? 'bg-red-500/25 border-red-400 text-red-200 animate-pulse'
-                          : 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/25'
-                      }`}
-                      title={listening ? 'Stop listening' : 'Voice command'}
-                    >
-                      <Mic className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={send}
-                      disabled={sending}
-                      className="px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/35 border border-cyan-400 text-cyan-200 text-glow-sm rounded-sm transition flex items-center gap-2 disabled:opacity-50"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span className="text-[10px] uppercase tracking-widest">Send</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* RIGHT COLUMN */}
-              <div className="col-span-12 lg:col-span-3 space-y-4">
-                <HUDPanel title="Global Uplink" icon={Globe}>
-                  <div className="h-[200px] w-full">
-                    <Globe3D />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 mt-2 text-[10px] uppercase tracking-widest">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-300" style={{ boxShadow: '0 0 6px #22d3ee' }} />
-                      <span className="text-cyan-400">Node Link</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} />
-                      <span className="text-red-400">Asset Pin</span>
-                    </div>
-                  </div>
-                </HUDPanel>
-
-                <HUDPanel title="Perimeter Scan" icon={RadarIcon}>
-                  <Radar />
-                  <div className="grid grid-cols-2 gap-2 mt-3 text-[10px] uppercase tracking-widest">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-300" style={{ boxShadow: '0 0 6px #22d3ee' }} />
-                      <span className="text-cyan-400">Friendly</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} />
-                      <span className="text-red-400">Unknown</span>
-                    </div>
-                  </div>
-                </HUDPanel>
-
-                <HUDPanel title="Mission Feed" icon={AlertTriangle}>
-                  <MissionFeed />
-                </HUDPanel>
-              </div>
-            </div>
-
-            {/* Footer status */}
-            <div className="border-t border-cyan-500/20 px-6 py-2 flex items-center justify-between text-[9px] uppercase tracking-[0.3em] text-cyan-500/70 backdrop-blur-sm bg-black/40">
-              <div className="flex items-center gap-4">
-                <span>&copy; Stark Industries</span>
-                <span>Build 1.0.0</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="text-emerald-400">● ALL SYSTEMS NOMINAL</span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* SIDE HUD MARKS */}
+      <div className="hidden md:flex absolute left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-30 pointer-events-none">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="text-[8px] text-cyan-500/60 tracking-widest">{String(i * 30).padStart(3, '0')}°</div>
+        ))}
+      </div>
+      <div className="hidden md:flex absolute right-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-30 pointer-events-none items-end">
+        {['ALPHA', 'BETA', 'GAMMA', 'DELTA', 'EPSILON'].map((s, i) => (
+          <div key={i} className="text-[8px] text-cyan-500/60 tracking-widest">{s} · 0{i + 1}</div>
+        ))}
+      </div>
     </div>
   )
 }
