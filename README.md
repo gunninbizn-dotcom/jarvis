@@ -40,3 +40,4 @@ This repository is a Next.js web application scaffold with custom UI components 
 
 - The repository is already configured to ignore common environment files and local secrets.
 - If you add Mongo or other secrets, keep them in `.env` and do not commit the file.
+
