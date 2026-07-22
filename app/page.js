@@ -11,8 +11,11 @@ import Radar from '@/components/jarvis/Radar'
 import Waveform from '@/components/jarvis/Waveform'
 import StatPanel from '@/components/jarvis/StatPanel'
 import BootSequence from '@/components/jarvis/BootSequence'
+import MissionFeed from '@/components/jarvis/MissionFeed'
+import MiniCalendar from '@/components/jarvis/MiniCalendar'
 
 const Core3D = dynamic(() => import('@/components/jarvis/Core3D'), { ssr: false })
+const Globe3D = dynamic(() => import('@/components/jarvis/Globe3D'), { ssr: false })
 
 function Clockface() {
   const [now, setNow] = useState(new Date())
@@ -83,6 +86,8 @@ function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [speaking, setSpeaking] = useState(false)
+  const [listening, setListening] = useState(false)
+  const recognitionRef = useRef(null)
   const sessionIdRef = useRef(null)
   const chatEndRef = useRef(null)
 
@@ -146,6 +151,45 @@ function App() {
   }
 
   const quickCmds = ['System status', 'Radar scan', 'Weather report', 'Tell me a joke', 'Who are you?']
+
+  // Voice recognition
+  const startListening = () => {
+    if (typeof window === 'undefined') return
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) {
+      setMessages(m => [...m, { role: 'jarvis', text: 'Voice input is not supported in this browser, Sir. Try Chrome or Edge.' }])
+      return
+    }
+    try { window.speechSynthesis?.cancel() } catch {}
+    const rec = new SR()
+    rec.lang = 'en-US'
+    rec.interimResults = true
+    rec.continuous = false
+    let finalText = ''
+    rec.onstart = () => setListening(true)
+    rec.onresult = (e) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) finalText += r[0].transcript
+        else interim += r[0].transcript
+      }
+      setInput((finalText || interim).trim())
+    }
+    rec.onerror = () => setListening(false)
+    rec.onend = () => {
+      setListening(false)
+      const t = (finalText || '').trim()
+      if (t) { setInput(t); setTimeout(send, 100) }
+    }
+    recognitionRef.current = rec
+    try { rec.start() } catch {}
+  }
+
+  const stopListening = () => {
+    try { recognitionRef.current?.stop() } catch {}
+    setListening(false)
+  }
 
   return (
     <div className="min-h-screen w-full bg-black text-cyan-100 relative overflow-hidden scanlines crt">
@@ -229,8 +273,8 @@ function App() {
                   <div className="text-center text-[10px] text-cyan-500 uppercase tracking-widest mt-1">Palladium: Stable</div>
                 </HUDPanel>
 
-                <HUDPanel title="Data Stream" icon={Activity}>
-                  <DataStream />
+                <HUDPanel title="Tactical Calendar" icon={Clock}>
+                  <MiniCalendar />
                 </HUDPanel>
               </div>
 
@@ -316,9 +360,20 @@ function App() {
                       value={input}
                       onChange={e => setInput(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && send()}
-                      placeholder="Speak, Sir..."
+                      placeholder={listening ? 'Listening...' : 'Speak, Sir...'}
                       className="flex-1 bg-black/40 border border-cyan-500/30 focus:border-cyan-400 outline-none px-3 py-2 text-sm text-cyan-100 rounded-sm placeholder:text-cyan-700 tracking-wide"
                     />
+                    <button
+                      onClick={listening ? stopListening : startListening}
+                      className={`px-3 py-2 border rounded-sm transition flex items-center gap-2 ${
+                        listening
+                          ? 'bg-red-500/25 border-red-400 text-red-200 animate-pulse'
+                          : 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/25'
+                      }`}
+                      title={listening ? 'Stop listening' : 'Voice command'}
+                    >
+                      <Mic className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       onClick={send}
                       disabled={sending}
@@ -333,6 +388,22 @@ function App() {
 
               {/* RIGHT COLUMN */}
               <div className="col-span-12 lg:col-span-3 space-y-4">
+                <HUDPanel title="Global Uplink" icon={Globe}>
+                  <div className="h-[200px] w-full">
+                    <Globe3D />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-[10px] uppercase tracking-widest">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-300" style={{ boxShadow: '0 0 6px #22d3ee' }} />
+                      <span className="text-cyan-400">Node Link</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} />
+                      <span className="text-red-400">Asset Pin</span>
+                    </div>
+                  </div>
+                </HUDPanel>
+
                 <HUDPanel title="Perimeter Scan" icon={RadarIcon}>
                   <Radar />
                   <div className="grid grid-cols-2 gap-2 mt-3 text-[10px] uppercase tracking-widest">
@@ -347,31 +418,8 @@ function App() {
                   </div>
                 </HUDPanel>
 
-                <HUDPanel title="Global Feed" icon={Globe}>
-                  <ul className="space-y-1.5 text-[11px]">
-                    {[
-                      { t: 'Stark Tower', s: 'OPERATIONAL', c: 'text-emerald-400' },
-                      { t: 'Malibu Residence', s: 'SECURE', c: 'text-emerald-400' },
-                      { t: 'Suit Bay-6', s: 'STANDBY', c: 'text-cyan-400' },
-                      { t: 'Satellite Uplink', s: 'ACTIVE', c: 'text-emerald-400' },
-                      { t: 'Firewall', s: 'MONITORING', c: 'text-cyan-400' },
-                      { t: 'External Threats', s: 'NONE DETECTED', c: 'text-emerald-400' },
-                    ].map((item, i) => (
-                      <li key={i} className="flex justify-between border-b border-cyan-500/10 pb-1">
-                        <span className="text-cyan-300/90">{item.t}</span>
-                        <span className={`${item.c} font-display tracking-widest text-[9px]`}>{item.s}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </HUDPanel>
-
-                <HUDPanel title="Directive Log" icon={AlertTriangle}>
-                  <div className="space-y-1.5 text-[10px] text-cyan-400/90 font-mono">
-                    <div><span className="text-cyan-600">[06:32]</span> Boot sequence complete</div>
-                    <div><span className="text-cyan-600">[06:33]</span> Neural mesh online</div>
-                    <div><span className="text-cyan-600">[06:34]</span> Uplink established</div>
-                    <div><span className="text-cyan-600">[06:35]</span> Awaiting directives...<span className="blink">_</span></div>
-                  </div>
+                <HUDPanel title="Mission Feed" icon={AlertTriangle}>
+                  <MissionFeed />
                 </HUDPanel>
               </div>
             </div>
