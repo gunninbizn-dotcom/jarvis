@@ -101,3 +101,167 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Futuristic JARVIS-style AI interface. Sci-fi HUD with 3D reactive energy core (Three.js),
+  holographic panels (system vitals, arc reactor, radar, 3D globe, mission feed, tactical calendar,
+  waveform), command console with rule-based JARVIS chat replies, browser TTS output, and
+  voice-input (Web Speech API) via mic button. User requested end-to-end test of voice-input mic.
+
+backend:
+  - task: "JARVIS backend API (/api/chat, /api/status)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Rule-based chat endpoint at POST /api/chat and telemetry at GET /api/status. Sessions logged to MongoDB. Not the focus of current bug — voice-input is UI-side."
+
+frontend:
+  - task: "Voice-input mic button (Web Speech API) end-to-end"
+    implemented: true
+    working: false
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Mic button next to Send button in the Command Console. On click, calls startListening()
+          which creates a webkitSpeechRecognition instance (SR.lang=en-US, interimResults=true).
+          - onstart sets listening=true (button turns red + animate-pulse)
+          - onresult updates input field with interim/final transcript
+          - onend auto-invokes send() with the transcript (which POSTs to /api/chat, appends
+            reply and speaks it via speechSynthesis)
+          - Clicking mic again while listening calls stopListening() (rec.stop())
+          - Fallback: if SpeechRecognition unavailable, appends a JARVIS message saying
+            'Voice input is not supported in this browser, Sir. Try Chrome or Edge.'
+          Need to verify: mic button exists & is clickable; permission-denied path shows the
+          fallback JARVIS message OR listening state properly triggers; the send() flow correctly
+          appends user message & JARVIS reply into the chat area; input placeholder swaps to
+          'Listening...' while active; stop button toggles state back. Note: Playwright / headless
+          Chromium typically cannot capture real audio, but SpeechRecognition object should be
+          instantiable via webkitSpeechRecognition polyfill; the click handler and UI state
+          transitions must be verifiable.
+      - working: false
+        agent: "testing"
+        comment: |
+          CRITICAL BUG FOUND: Mic button click handler does not work when SpeechRecognition.start() fails silently.
+          
+          Test Results:
+          ✓ Mic button exists and is visible (title="Voice command", contains Mic SVG icon)
+          ✓ Button is positioned correctly next to Send button in Command Console
+          ✓ Button has onClick handler properly attached (verified via React fiber)
+          ✓ SpeechRecognition API is available (window.webkitSpeechRecognition exists)
+          ✓ Can instantiate SpeechRecognition object
+          ✗ FAIL: rec.start() silently fails due to microphone permissions in headless browser
+          ✗ FAIL: No fallback message appears when start() fails
+          ✗ FAIL: Button remains in default state (no visual feedback)
+          ✗ FAIL: Placeholder stays as "Speak, Sir..." instead of showing error state
+          
+          Root Cause Analysis:
+          In /app/app/page.js lines 156-187, the startListening() function:
+          1. Checks if SpeechRecognition API exists (line 158-162) - PASSES
+          2. Creates recognition instance (line 164) - SUCCEEDS
+          3. Calls rec.start() (line 186) wrapped in try-catch - EXECUTES
+          4. Problem: rec.start() fails silently in headless/automated browsers due to missing microphone permissions
+          5. The onstart event never fires, so setListening(true) never executes (line 169)
+          6. The onerror handler (line 179) only sets listening=false but doesn't show fallback message
+          7. The try-catch (line 186) has empty catch block, so errors are swallowed
+          
+          Expected Behavior (per requirements):
+          When SpeechRecognition fails to start, should display JARVIS fallback message:
+          "Voice input is not supported in this browser, Sir. Try Chrome or Edge."
+          
+          Current Behavior:
+          Nothing happens - button stays cyan, no state change, no error message.
+          
+          Fix Required:
+          Add proper error handling in startListening() to detect when rec.start() fails:
+          - Option 1: Add timeout to detect if onstart never fires within 1-2 seconds
+          - Option 2: Enhance onerror handler to show fallback message
+          - Option 3: Add better error handling in the try-catch block at line 186
+          
+          Note: Text input flow works correctly - verified "System status" command successfully 
+          triggers JARVIS reply with diagnostic information.
+
+  - task: "JARVIS chat command console (text input flow)"
+    implemented: true
+    working: true
+    file: "/app/app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Already verified via manual Playwright screenshot: typed 'Give me a system status report', received expected diagnostic reply, telemetry panels updated."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Voice-input mic button (Web Speech API) end-to-end"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      User explicitly requested end-to-end test of the voice-input mic feature (option C).
+      Please verify on the frontend page (root URL) that:
+        1. The mic button (lucide Mic icon) is visible in the Command Console, immediately to
+           the left of the Send button. Selector hint: button with title="Voice command" or
+           containing the Mic svg.
+        2. Clicking the mic button triggers ONE of two acceptable outcomes:
+             (a) The button flips to a red / animate-pulse "listening" state AND the input
+                 placeholder becomes 'Listening...' (browser has SpeechRecognition support).
+             (b) A JARVIS chat bubble appears saying voice input is not supported.
+           Either outcome proves the handler wired correctly.
+        3. Clicking the mic a second time while listening returns it to the default cyan style
+           (stopListening path).
+        4. Confirm no page JS errors occur during interaction.
+        5. Verify the text-input flow still works: type "System status" -> press Enter -> a
+           JARVIS reply message appears within a few seconds.
+      Environment: use the NEXT_PUBLIC_BASE_URL from /app/.env for the app URL. Use Chromium
+      via Playwright. If SpeechRecognition is not present in headless Chromium, path (b) is
+      expected and considered PASSING.
+  - agent: "testing"
+    message: |
+      TESTING COMPLETE - CRITICAL BUG FOUND
+      
+      The mic button click handler has a critical bug: when SpeechRecognition.start() fails 
+      silently (due to microphone permissions in headless/automated browsers), no fallback 
+      message is shown and the button provides no visual feedback.
+      
+      The issue is in /app/app/page.js startListening() function (lines 156-187):
+      - rec.start() is called but fails silently without triggering onstart or onerror events
+      - The empty try-catch block swallows any exceptions
+      - User sees no feedback - button stays cyan, no error message appears
+      
+      REQUIRED FIX:
+      Add timeout-based error detection in startListening() to show the fallback JARVIS message
+      when rec.start() fails to trigger onstart within 1-2 seconds. This will handle cases where
+      microphone permissions are denied or unavailable.
+      
+      Suggested implementation:
+      After rec.start(), set a timeout that checks if onstart fired. If not, clear the timeout
+      and show the fallback message: "Voice input is not supported in this browser, Sir. Try 
+      Chrome or Edge."
+      
+      All other functionality works correctly:
+      ✓ Mic button renders properly
+      ✓ Text input flow works (verified with "System status" command)
+      ✓ No console errors
+      ✓ Chat replies display correctly
