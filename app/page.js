@@ -166,7 +166,19 @@ function App() {
     rec.interimResults = true
     rec.continuous = false
     let finalText = ''
-    rec.onstart = () => setListening(true)
+    let started = false
+    let startTimer = null
+    const showUnavailable = (reason) => {
+      const msg = reason === 'not-allowed' || reason === 'permission-denied'
+        ? 'Microphone permission is blocked, Sir. Please allow microphone access in your browser settings.'
+        : 'Voice input is unavailable in this environment, Sir. Try opening the app in Chrome or Edge with microphone permission granted.'
+      setMessages(m => [...m, { role: 'jarvis', text: msg }])
+    }
+    rec.onstart = () => {
+      started = true
+      if (startTimer) { clearTimeout(startTimer); startTimer = null }
+      setListening(true)
+    }
     rec.onresult = (e) => {
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -176,14 +188,32 @@ function App() {
       }
       setInput((finalText || interim).trim())
     }
-    rec.onerror = () => setListening(false)
+    rec.onerror = (e) => {
+      setListening(false)
+      if (startTimer) { clearTimeout(startTimer); startTimer = null }
+      showUnavailable(e?.error)
+    }
     rec.onend = () => {
       setListening(false)
+      if (startTimer) { clearTimeout(startTimer); startTimer = null }
       const t = (finalText || '').trim()
       if (t) { setInput(t); setTimeout(send, 100) }
     }
     recognitionRef.current = rec
-    try { rec.start() } catch {}
+    try {
+      rec.start()
+      // If onstart never fires within 1.5s, surface a fallback message
+      startTimer = setTimeout(() => {
+        if (!started) {
+          setListening(false)
+          showUnavailable()
+          try { rec.abort && rec.abort() } catch {}
+        }
+      }, 1500)
+    } catch (err) {
+      setListening(false)
+      showUnavailable(err?.name)
+    }
   }
 
   const stopListening = () => {

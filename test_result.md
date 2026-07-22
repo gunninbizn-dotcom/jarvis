@@ -124,7 +124,7 @@ backend:
 frontend:
   - task: "Voice-input mic button (Web Speech API) end-to-end"
     implemented: true
-    working: false
+    working: true
     file: "/app/app/page.js"
     stuck_count: 0
     priority: "high"
@@ -133,22 +133,7 @@ frontend:
       - working: "NA"
         agent: "main"
         comment: |
-          Mic button next to Send button in the Command Console. On click, calls startListening()
-          which creates a webkitSpeechRecognition instance (SR.lang=en-US, interimResults=true).
-          - onstart sets listening=true (button turns red + animate-pulse)
-          - onresult updates input field with interim/final transcript
-          - onend auto-invokes send() with the transcript (which POSTs to /api/chat, appends
-            reply and speaks it via speechSynthesis)
-          - Clicking mic again while listening calls stopListening() (rec.stop())
-          - Fallback: if SpeechRecognition unavailable, appends a JARVIS message saying
-            'Voice input is not supported in this browser, Sir. Try Chrome or Edge.'
-          Need to verify: mic button exists & is clickable; permission-denied path shows the
-          fallback JARVIS message OR listening state properly triggers; the send() flow correctly
-          appends user message & JARVIS reply into the chat area; input placeholder swaps to
-          'Listening...' while active; stop button toggles state back. Note: Playwright / headless
-          Chromium typically cannot capture real audio, but SpeechRecognition object should be
-          instantiable via webkitSpeechRecognition polyfill; the click handler and UI state
-          transitions must be verifiable.
+          Initial impl: mic button wired to startListening() using webkitSpeechRecognition.
       - working: false
         agent: "testing"
         comment: |
@@ -190,6 +175,57 @@ frontend:
           
           Note: Text input flow works correctly - verified "System status" command successfully 
           triggers JARVIS reply with diagnostic information.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          FIX APPLIED in /app/app/page.js startListening():
+          1. Added a `started` flag + 1.5s `startTimer` after `rec.start()`. If `onstart` hasn't
+             fired within 1.5s, we call showUnavailable() (appends JARVIS chat message) and
+             abort recognition. This catches the silent-fail case in headless Chromium.
+          2. `onerror(e)` now surfaces the error via showUnavailable(e.error) — with a specific
+             message for 'not-allowed'/'permission-denied' vs a generic unavailable message.
+          3. Synchronous throw from rec.start() (caught by try/catch) also calls showUnavailable.
+          4. Both onstart and onend clear the startTimer so it doesn't fire spuriously.
+          Expected in headless Chromium: within ~1.5s after clicking mic, a JARVIS chat bubble
+          appears saying "Voice input is unavailable in this environment, Sir..." OR
+          "Microphone permission is blocked, Sir...".
+          Please re-run the mic-click test.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ RE-TEST PASSED: Voice-input mic button fix verified successfully!
+          
+          Test Environment:
+          - Browser: Chromium (headless) via Playwright
+          - Viewport: 1400x900 (desktop layout)
+          - URL: https://nextjs-3d-builder.preview.emergentagent.com
+          
+          Test Procedure:
+          1. Waited for page load and boot sequence completion (~4 seconds)
+          2. Located mic button using selector: button[title="Voice command"]
+          3. Clicked the mic button
+          4. Waited 2 seconds for fallback message to appear
+          
+          Test Results:
+          ✓ Mic button found and visible in Command Console
+          ✓ Mic button click executed successfully
+          ✓ JARVIS fallback message appeared within 2 seconds
+          ✓ Message text: "Voice input is unavailable in this environment, Sir. Try opening the app in Chrome or Edge with microphone permission granted."
+          ✓ No JavaScript errors in console
+          ✓ No error elements on page
+          
+          Verification:
+          The fix is working exactly as designed. When SpeechRecognition.start() fails to trigger
+          the onstart event within 1.5 seconds (due to missing microphone permissions in headless
+          browser), the startTimer timeout fires and calls showUnavailable(), which appends a
+          JARVIS chat message to inform the user. This provides proper user feedback instead of
+          the previous silent failure.
+          
+          Screenshots captured:
+          - 01_initial_state.png: Shows initial JARVIS greeting
+          - 02_after_mic_click.png: Shows fallback message after mic button click
+          
+          The voice-input mic button feature is now working correctly with proper error handling.
 
   - task: "JARVIS chat command console (text input flow)"
     implemented: true
@@ -210,8 +246,7 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus:
-    - "Voice-input mic button (Web Speech API) end-to-end"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -265,3 +300,24 @@ agent_communication:
       ✓ Text input flow works (verified with "System status" command)
       ✓ No console errors
       ✓ Chat replies display correctly
+  - agent: "testing"
+    message: |
+      ✅ RE-TEST COMPLETE - FIX VERIFIED SUCCESSFULLY
+      
+      The voice-input mic button fix has been tested and is working correctly!
+      
+      Test Summary:
+      - Clicked mic button in headless Chromium (no microphone permissions)
+      - Within 2 seconds, JARVIS fallback message appeared as expected
+      - Message: "Voice input is unavailable in this environment, Sir. Try opening the app in Chrome or Edge with microphone permission granted."
+      - No JavaScript errors occurred
+      - Screenshots captured showing before/after states
+      
+      The fix successfully addresses the original bug:
+      ✓ Added 1.5s timeout to detect when onstart doesn't fire
+      ✓ showUnavailable() function appends JARVIS chat message
+      ✓ Enhanced onerror handler to surface specific error messages
+      ✓ Try/catch block now calls showUnavailable() on synchronous errors
+      
+      The voice-input feature now provides proper user feedback when SpeechRecognition
+      fails to start, instead of failing silently. Task marked as working=true.
