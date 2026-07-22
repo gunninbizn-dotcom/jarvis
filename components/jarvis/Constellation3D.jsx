@@ -6,19 +6,15 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 
-// Palette
 const PALETTE = [
-  new THREE.Color('#00f0ff'),
-  new THREE.Color('#00f0ff'),
-  new THREE.Color('#00f0ff'),
-  new THREE.Color('#00c8ff'),
-  new THREE.Color('#ffffff'),
-  new THREE.Color('#ffb700'),
-  new THREE.Color('#ffb700'),
-  new THREE.Color('#ff2a5f'),
+  new THREE.Color('#00f0ff'), new THREE.Color('#00f0ff'), new THREE.Color('#00f0ff'),
+  new THREE.Color('#00c8ff'), new THREE.Color('#ffffff'),
+  new THREE.Color('#ffb700'), new THREE.Color('#ffb700'), new THREE.Color('#ff2a5f'),
 ]
 
-export default function Constellation3D({ onNodeClick }) {
+const FLASH_POOL_SIZE = 16
+
+export default function Constellation3D({ onNodeClick, intensityRef, flashesRef }) {
   const mountRef = useRef(null)
   const callbackRef = useRef(onNodeClick)
   useEffect(() => { callbackRef.current = onNodeClick }, [onNodeClick])
@@ -26,13 +22,11 @@ export default function Constellation3D({ onNodeClick }) {
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
-
     const width = mount.clientWidth
     const height = mount.clientHeight
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x000000)
-
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 200)
     camera.position.set(0, 0, 9)
 
@@ -42,52 +36,48 @@ export default function Constellation3D({ onNodeClick }) {
     renderer.setClearColor(0x000000, 1)
     mount.appendChild(renderer.domElement)
 
-    // ----- Post-processing bloom -----
     const composer = new EffectComposer(renderer)
-    const renderPass = new RenderPass(scene, camera)
-    composer.addPass(renderPass)
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      1.2,  // strength
-      0.6,  // radius
-      0.0   // threshold
-    )
+    composer.addPass(new RenderPass(scene, camera))
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.15, 0.6, 0.0)
     composer.addPass(bloomPass)
 
     const root = new THREE.Group()
     scene.add(root)
 
-    // ----- PARTICLES -----
-    const PARTICLE_COUNT = 2400
-    const positions = new Float32Array(PARTICLE_COUNT * 3)
-    const colors = new Float32Array(PARTICLE_COUNT * 3)
-    const nodes = []
+    // ------ PARTICLES ------
+    const N = 2400
+    const positions = new Float32Array(N * 3)
+    const colors = new Float32Array(N * 3)
+    const baseDir = new Float32Array(N * 3) // unit direction
+    const baseR = new Float32Array(N)
+    const phase = new Float32Array(N)
+    const colorHex = new Array(N)
 
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
+    for (let i = 0; i < N; i++) {
       const shellBias = Math.random()
       const r = shellBias < 0.75
         ? 3.2 + (Math.random() - 0.5) * 1.4
         : 0.6 + Math.random() * 2.5
       const theta = Math.random() * Math.PI * 2
       const phi = Math.acos(2 * Math.random() - 1)
-      const x = r * Math.sin(phi) * Math.cos(theta)
-      const y = r * Math.cos(phi)
-      const z = r * Math.sin(phi) * Math.sin(theta)
-      positions[i * 3] = x
-      positions[i * 3 + 1] = y
-      positions[i * 3 + 2] = z
-      nodes.push({ i, x, y, z, r })
+      const dx = Math.sin(phi) * Math.cos(theta)
+      const dy = Math.cos(phi)
+      const dz = Math.sin(phi) * Math.sin(theta)
+      baseDir[i * 3] = dx; baseDir[i * 3 + 1] = dy; baseDir[i * 3 + 2] = dz
+      baseR[i] = r
+      phase[i] = Math.random() * Math.PI * 2
+      positions[i * 3] = dx * r
+      positions[i * 3 + 1] = dy * r
+      positions[i * 3 + 2] = dz * r
       const c = PALETTE[Math.floor(Math.random() * PALETTE.length)]
-      colors[i * 3] = c.r
-      colors[i * 3 + 1] = c.g
-      colors[i * 3 + 2] = c.b
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b
+      colorHex[i] = c.getHexString()
     }
 
     const particleGeo = new THREE.BufferGeometry()
     particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
-    // Round sprite
     const spriteCanvas = document.createElement('canvas')
     spriteCanvas.width = spriteCanvas.height = 64
     const sctx = spriteCanvas.getContext('2d')
@@ -96,50 +86,47 @@ export default function Constellation3D({ onNodeClick }) {
     grad.addColorStop(0.3, 'rgba(255,255,255,0.7)')
     grad.addColorStop(0.7, 'rgba(255,255,255,0.15)')
     grad.addColorStop(1, 'rgba(255,255,255,0)')
-    sctx.fillStyle = grad
-    sctx.fillRect(0, 0, 64, 64)
+    sctx.fillStyle = grad; sctx.fillRect(0, 0, 64, 64)
     const sprite = new THREE.CanvasTexture(spriteCanvas)
 
     const particleMat = new THREE.PointsMaterial({
-      size: 0.09,
-      vertexColors: true,
-      map: sprite,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
+      size: 0.09, vertexColors: true, map: sprite,
+      transparent: true, opacity: 0.95, depthWrite: false,
+      blending: THREE.AdditiveBlending, sizeAttenuation: true,
     })
     const particles = new THREE.Points(particleGeo, particleMat)
     root.add(particles)
 
-    // ----- CONNECTIONS -----
-    const linePositions = []
-    const lineColors = []
-    const MAX_CONN_PER_NODE = 3
-    const CONN_DIST = 0.55
-    const shellIndices = nodes.filter(n => n.r > 2.4).map(n => n.i)
+    // ------ CONNECTIONS (dynamic) ------
+    const lineIdx = [] // flat array [a0,b0, a1,b1, ...]
+    const shellIndices = []
+    for (let i = 0; i < N; i++) if (baseR[i] > 2.4) shellIndices.push(i)
     for (let ii = 0; ii < shellIndices.length; ii++) {
       const i = shellIndices[ii]
-      const ax = positions[i * 3], ay = positions[i * 3 + 1], az = positions[i * 3 + 2]
       let count = 0
-      for (let s = 0; s < 40 && count < MAX_CONN_PER_NODE; s++) {
+      for (let s = 0; s < 30 && count < 3; s++) {
         const j = shellIndices[Math.floor(Math.random() * shellIndices.length)]
         if (j === i) continue
-        const bx = positions[j * 3], by = positions[j * 3 + 1], bz = positions[j * 3 + 2]
-        const dx = ax - bx, dy = ay - by, dz = az - bz
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz)
-        if (d < CONN_DIST) {
-          linePositions.push(ax, ay, az, bx, by, bz)
-          lineColors.push(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2])
-          lineColors.push(colors[j * 3], colors[j * 3 + 1], colors[j * 3 + 2])
-          count++
-        }
+        const dxx = positions[i * 3] - positions[j * 3]
+        const dyy = positions[i * 3 + 1] - positions[j * 3 + 1]
+        const dzz = positions[i * 3 + 2] - positions[j * 3 + 2]
+        const d = Math.sqrt(dxx * dxx + dyy * dyy + dzz * dzz)
+        if (d < 0.55) { lineIdx.push(i, j); count++ }
       }
     }
+    const lineCount = lineIdx.length / 2
+    const linePositions = new Float32Array(lineCount * 6)
+    const lineColors = new Float32Array(lineCount * 6)
+    for (let k = 0; k < lineCount; k++) {
+      const a = lineIdx[k * 2], b = lineIdx[k * 2 + 1]
+      linePositions[k * 6] = positions[a * 3];     linePositions[k * 6 + 1] = positions[a * 3 + 1]; linePositions[k * 6 + 2] = positions[a * 3 + 2]
+      linePositions[k * 6 + 3] = positions[b * 3]; linePositions[k * 6 + 4] = positions[b * 3 + 1]; linePositions[k * 6 + 5] = positions[b * 3 + 2]
+      lineColors[k * 6] = colors[a * 3];     lineColors[k * 6 + 1] = colors[a * 3 + 1]; lineColors[k * 6 + 2] = colors[a * 3 + 2]
+      lineColors[k * 6 + 3] = colors[b * 3]; lineColors[k * 6 + 4] = colors[b * 3 + 1]; lineColors[k * 6 + 5] = colors[b * 3 + 2]
+    }
     const lineGeo = new THREE.BufferGeometry()
-    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3))
-    lineGeo.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3))
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3))
+    lineGeo.setAttribute('color', new THREE.BufferAttribute(lineColors, 3))
     const lineMat = new THREE.LineBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.35,
       blending: THREE.AdditiveBlending, depthWrite: false,
@@ -147,15 +134,11 @@ export default function Constellation3D({ onNodeClick }) {
     const lineSegs = new THREE.LineSegments(lineGeo, lineMat)
     root.add(lineSegs)
 
-    // ----- CENTRAL CORE -----
-    const coreGroup = new THREE.Group()
-    root.add(coreGroup)
+    // ------ CENTRAL CORE ------
+    const coreGroup = new THREE.Group(); root.add(coreGroup)
     const makeGlow = (r, color, opacity) => {
       const g = new THREE.SphereGeometry(r, 32, 32)
-      const m = new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      })
+      const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false })
       return new THREE.Mesh(g, m)
     }
     const core1 = makeGlow(0.22, 0xffffff, 1.0)
@@ -165,29 +148,31 @@ export default function Constellation3D({ onNodeClick }) {
     const core5 = makeGlow(2.0, 0x0891b2, 0.06)
     coreGroup.add(core1, core2, core3, core4, core5)
 
-    // Highlight marker for selected node (small pulsing ring)
-    const highlight = new THREE.Mesh(
-      new THREE.RingGeometry(0.08, 0.12, 24),
-      new THREE.MeshBasicMaterial({
-        color: 0xff2a5f, side: THREE.DoubleSide,
-        transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-      })
-    )
-    root.add(highlight)
-    let highlightUntil = 0
+    // ------ FLASH POOL (live events + selection highlight) ------
+    const flashSpriteMat = new THREE.SpriteMaterial({
+      map: sprite, color: 0xffffff, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+    const flashPool = []
+    for (let k = 0; k < FLASH_POOL_SIZE; k++) {
+      const s = new THREE.Sprite(flashSpriteMat.clone())
+      s.scale.setScalar(0.001)
+      s.visible = false
+      root.add(s)
+      flashPool.push({ sprite: s, activeFlash: null })
+    }
 
-    // ----- Mouse interaction -----
+    // ------ Mouse interaction ------
     const targetRot = { x: 0, y: 0 }
     const onMouseMove = (e) => {
       const rect = mount.getBoundingClientRect()
       const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
       const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1
-      targetRot.y = nx * 0.5
-      targetRot.x = ny * 0.3
+      targetRot.y = nx * 0.5; targetRot.x = ny * 0.3
     }
     window.addEventListener('mousemove', onMouseMove)
 
-    // ----- Raycaster for click-to-select -----
+    // ------ Raycaster ------
     const raycaster = new THREE.Raycaster()
     raycaster.params.Points.threshold = 0.14
     const mouseNdc = new THREE.Vector2()
@@ -195,39 +180,32 @@ export default function Constellation3D({ onNodeClick }) {
     const onPointerDown = (e) => { downXY = { x: e.clientX, y: e.clientY, t: Date.now() } }
     const onPointerUp = (e) => {
       if (!downXY) return
-      const dx = e.clientX - downXY.x, dy = e.clientY - downXY.y
-      const moved = Math.hypot(dx, dy)
+      const moved = Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y)
       const elapsed = Date.now() - downXY.t
       downXY = null
-      if (moved > 6 || elapsed > 500) return // treat as drag/hold
+      if (moved > 6 || elapsed > 500) return
       const rect = mount.getBoundingClientRect()
       mouseNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       mouseNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(mouseNdc, camera)
       const hits = raycaster.intersectObject(particles)
       if (hits.length > 0) {
-        // Pick nearest node to camera among hits
-        const hit = hits[0]
-        const idx = hit.index
-        // Use current world-space position of that point (accounts for rotation)
-        const localVec = new THREE.Vector3(
-          positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2]
-        )
+        const idx = hits[0].index
+        const localVec = new THREE.Vector3(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2])
         const worldVec = localVec.clone().applyMatrix4(root.matrixWorld)
-        // Position + show highlight
-        highlight.position.copy(localVec)
-        highlight.lookAt(camera.position.clone().applyMatrix4(root.matrixWorld.clone().invert()))
-        highlightUntil = performance.now() + 2500
-        // Screen coords for the DOM detail panel
         const proj = worldVec.clone().project(camera)
         const sx = (proj.x * 0.5 + 0.5) * rect.width + rect.left
         const sy = (-proj.y * 0.5 + 0.5) * rect.height + rect.top
+        // Trigger a flash on click
+        if (flashesRef && flashesRef.current) {
+          flashesRef.current.push({
+            index: idx, startTime: performance.now(), duration: 1400, color: 0xffffff, size: 0.6,
+          })
+        }
         if (callbackRef.current) {
           callbackRef.current({
-            index: idx,
-            x: sx, y: sy,
-            r: Math.hypot(localVec.x, localVec.y, localVec.z),
-            color: new THREE.Color(colors[idx * 3], colors[idx * 3 + 1], colors[idx * 3 + 2]).getHexString(),
+            index: idx, x: sx, y: sy,
+            r: baseR[idx], color: colorHex[idx],
           })
         }
       }
@@ -236,30 +214,88 @@ export default function Constellation3D({ onNodeClick }) {
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
     renderer.domElement.addEventListener('pointerup', onPointerUp)
 
-    // ----- ANIMATION -----
+    // ------ ANIMATE ------
     let raf
     const clock = new THREE.Clock()
+    let smoothedIntensity = 0
+    let rotVelY = 0
+
     const animate = () => {
       const t = clock.getElapsedTime()
-      root.rotation.y += (targetRot.y + t * 0.08 - root.rotation.y) * 0.02
+      const dt = Math.min(0.05, clock.getDelta())
+      const rawIntensity = intensityRef?.current || 0
+      smoothedIntensity += (rawIntensity - smoothedIntensity) * 0.15
+      const I = smoothedIntensity
+
+      // Rotation: base slow + intensity boost, with easing (inertia)
+      const targetVelY = 0.08 + I * 0.6
+      rotVelY += (targetVelY - rotVelY) * 0.05
+      root.rotation.y += rotVelY * dt
       root.rotation.x += (targetRot.x - root.rotation.x) * 0.03
+      root.rotation.y += (targetRot.y * 0.15 - (root.rotation.y - t * 0)) * 0.001 // subtle mouse influence
 
-      const pulse = 1 + Math.sin(t * 2.2) * 0.08
-      core1.scale.setScalar(pulse)
-      core2.scale.setScalar(1 + Math.sin(t * 1.6) * 0.15)
-      core3.scale.setScalar(1 + Math.sin(t * 1.1 + 1) * 0.2)
-      lineSegs.material.opacity = 0.28 + Math.sin(t * 1.5) * 0.1
+      // Idle breathing (4s period): scale factor applied inside particle radius as well
+      const breath = 1 + 0.025 * Math.sin(t * (Math.PI / 2))
+      // Outward burst amount
+      const burst = 0.16 * I
+      // Ripple amplitude
+      const rippleAmp = 0.08 * I
 
-      // Highlight pulse
-      if (performance.now() < highlightUntil) {
-        const life = 1 - (highlightUntil - performance.now()) / 2500
-        highlight.material.opacity = (1 - life) * 0.9
-        const s = 1 + life * 2
-        highlight.scale.setScalar(s)
-        // billboard
-        highlight.quaternion.copy(camera.quaternion)
-      } else {
-        highlight.material.opacity = 0
+      // Update particle positions
+      for (let i = 0; i < N; i++) {
+        const dx = baseDir[i * 3], dy = baseDir[i * 3 + 1], dz = baseDir[i * 3 + 2]
+        const bR = baseR[i]
+        const ripple = rippleAmp * Math.sin(bR * 2.5 - t * 5 + phase[i])
+        const r = bR * (breath + burst + ripple * 0.6)
+        positions[i * 3] = dx * r
+        positions[i * 3 + 1] = dy * r
+        positions[i * 3 + 2] = dz * r
+      }
+      particleGeo.attributes.position.needsUpdate = true
+
+      // Update line positions from current particles
+      for (let k = 0; k < lineCount; k++) {
+        const a = lineIdx[k * 2], b = lineIdx[k * 2 + 1]
+        linePositions[k * 6] = positions[a * 3];     linePositions[k * 6 + 1] = positions[a * 3 + 1]; linePositions[k * 6 + 2] = positions[a * 3 + 2]
+        linePositions[k * 6 + 3] = positions[b * 3]; linePositions[k * 6 + 4] = positions[b * 3 + 1]; linePositions[k * 6 + 5] = positions[b * 3 + 2]
+      }
+      lineGeo.attributes.position.needsUpdate = true
+
+      // Core pulse (breath + intensity)
+      const corePulse = breath + I * 0.3
+      core1.scale.setScalar(corePulse * (1 + Math.sin(t * 2.2) * 0.05))
+      core2.scale.setScalar(corePulse * (1 + Math.sin(t * 1.6) * 0.12))
+      core3.scale.setScalar(corePulse * (1 + Math.sin(t * 1.1 + 1) * 0.16))
+      core4.scale.setScalar(1 + I * 0.3)
+      core5.scale.setScalar(1 + I * 0.4)
+      lineSegs.material.opacity = 0.25 + I * 0.35 + Math.sin(t * 1.5) * 0.05
+
+      // Live-event flashes
+      const now = performance.now()
+      const active = flashesRef?.current || []
+      // Prune old
+      for (let a = active.length - 1; a >= 0; a--) {
+        if (now - active[a].startTime > active[a].duration) active.splice(a, 1)
+      }
+      // Assign to pool
+      for (let k = 0; k < flashPool.length; k++) {
+        const slot = flashPool[k]
+        if (k < active.length) {
+          const f = active[k]
+          const life = (now - f.startTime) / f.duration
+          if (life >= 1) { slot.sprite.visible = false; slot.activeFlash = null; continue }
+          const idx = f.index
+          slot.sprite.position.set(positions[idx * 3], positions[idx * 3 + 1], positions[idx * 3 + 2])
+          slot.sprite.material.color.setHex(f.color || 0xffffff)
+          // Grow then fade
+          const ease = life < 0.35 ? life / 0.35 : 1
+          const fade = life < 0.35 ? 1 : 1 - (life - 0.35) / 0.65
+          slot.sprite.scale.setScalar((f.size || 0.35) * (0.4 + ease * 1.8))
+          slot.sprite.material.opacity = fade
+          slot.sprite.visible = true
+        } else {
+          slot.sprite.visible = false
+        }
       }
 
       composer.render()
@@ -267,7 +303,6 @@ export default function Constellation3D({ onNodeClick }) {
     }
     animate()
 
-    // Resize
     const onResize = () => {
       if (!mount) return
       const w = mount.clientWidth, h = mount.clientHeight
