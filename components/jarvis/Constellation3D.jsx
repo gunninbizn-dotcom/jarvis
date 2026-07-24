@@ -27,6 +27,10 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 200)
     camera.position.set(0, 0, 9)
 
+    const existingCanvas = mount.querySelector('canvas')
+    if (existingCanvas) {
+      existingCanvas.remove()
+    }
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' })
     renderer.sortObjects = false
     // Avoid setting NoColorSpace here because Three.js color management can pass it into getPrimaries
@@ -327,6 +331,9 @@ export default function Constellation3D({ onNodeClick, intensityRef, flashesRef 
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       ro.disconnect()
+      try {
+        renderer.forceContextLoss()
+      } catch {}
       renderer.dispose()
       particleGeo.dispose(); particleMat.dispose()
       lineGeo.dispose(); lineMat.dispose()

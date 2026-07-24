@@ -108,6 +108,25 @@ html, body {
   z-index: 5;
 }
 
+.hud-core-ring {
+  position: absolute;
+  width: min(56vw, 520px);
+  height: min(56vw, 520px);
+  border: 1px solid rgba(0,240,255,0.45);
+  border-radius: 9999px;
+  box-shadow: 0 0 120px rgba(0,240,255,0.08), inset 0 0 18px rgba(0,240,255,0.18);
+  backdrop-filter: blur(18px);
+}
+
+.hud-core-halo {
+  position: absolute;
+  width: min(68vw, 640px);
+  height: min(68vw, 640px);
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(0,240,255,0.14) 0%, transparent 55%);
+  filter: blur(14px);
+}
+
 /* Callout connector line pulse */
 @keyframes dashScroll {
   from { stroke-dashoffset: 0; }

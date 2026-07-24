@@ -25,6 +25,10 @@ export default function Core3D({ speaking = false }) {
     camera.position.set(0, 0, 6)
 
     // Renderer
+    const existingCanvas = mount.querySelector('canvas')
+    if (existingCanvas) {
+      existingCanvas.remove()
+    }
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
     renderer.setSize(width, height)
@@ -195,6 +199,9 @@ export default function Core3D({ speaking = false }) {
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      try {
+        renderer.forceContextLoss()
+      } catch {}
       renderer.dispose()
       outerGeo.dispose(); outerMat.dispose()
       innerGeo.dispose(); innerMat.dispose()

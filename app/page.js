@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X } from 'lucide-react'
+import { X, Cpu, Mic, Wifi, Info } from 'lucide-react'
 import VoiceController from '@/components/jarvis/VoiceController'
 
 const Constellation3D = dynamic(() => import('@/components/jarvis/Constellation3D'), { ssr: false })
@@ -92,6 +92,74 @@ function Connectors({ positions, center, highlightedId }) {
   )
 }
 
+function ListeningBanner() {
+  return (
+    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }} className="mb-3 flex items-center gap-2 rounded-full border border-cyan-500/30 bg-black/70 px-3 py-1 text-[9px] uppercase tracking-[0.35em] text-cyan-300 shadow-[0_0_18px_rgba(0,240,255,0.12)]">
+      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_12px_rgba(255,66,110,0.5)]" />
+      <span>LISTENING OFF</span>
+    </motion.div>
+  )
+}
+
+const DOCK_ITEMS = [
+  { icon: Cpu, label: 'Core' },
+  { icon: Wifi, label: 'Signal' },
+  { icon: Mic, label: 'Voice' },
+]
+
+function SideDock() {
+  return (
+    <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.65, delay: 0.1 }} className="absolute left-6 top-1/2 z-30 -translate-y-1/2 flex flex-col gap-3">
+      <div className="corner-brackets bg-black/70 border border-cyan-500/20 glow-cyan p-3 text-cyan-300 shadow-[0_0_20px_rgba(0,240,255,0.08)]">
+        <div className="text-[9px] uppercase tracking-[0.35em] mb-3 text-cyan-400/80">Controls</div>
+        <div className="space-y-3">
+          {DOCK_ITEMS.map((item) => {
+            const Icon = item.icon
+            return (
+              <button key={item.label} type="button" className="group flex items-center gap-3 rounded-3xl border border-cyan-500/10 bg-cyan-500/5 px-3 py-2 transition hover:border-cyan-300/60 hover:bg-cyan-500/15 hover:text-cyan-100 focus:outline-none">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-3xl bg-cyan-400/10 text-cyan-300 transition group-hover:bg-cyan-400/20">
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.25em] text-cyan-200">{item.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+function BottomStatus() {
+  return (
+    <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.65, delay: 0.15 }} className="absolute bottom-6 left-1/2 z-30 w-[min(92vw,560px)] -translate-x-1/2 rounded-[32px] border border-cyan-500/15 bg-black/60 px-5 py-3 text-[10px] uppercase tracking-[0.3em] text-cyan-200 shadow-[0_0_30px_rgba(0,240,255,0.12)] backdrop-blur-xl">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Info className="h-4 w-4 text-cyan-300" />
+          <span>Jarvis core stable. Voice input idle.</span>
+        </div>
+        <div className="text-cyan-400">READY</div>
+      </div>
+    </motion.div>
+  )
+}
+
+function CoreOverlay() {
+  return (
+    <div className="absolute inset-0 z-20 pointer-events-none">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="hud-core-ring" />
+        <div className="hud-core-halo" />
+        <div className="absolute z-20 flex flex-col items-center gap-2 text-center px-6">
+          <div className="text-[9px] uppercase tracking-[0.3em] text-cyan-400/70">NEURAL CORE</div>
+          <div className="font-display text-4xl md:text-5xl font-bold text-cyan-100 text-glow tracking-[0.3em]">J A R V I S</div>
+          <div className="text-[10px] uppercase tracking-[0.35em] text-cyan-300/70">INTELLIGENCE SYNTHESIS · ONLINE</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --------- Clock ---------
 function LiveClock() {
   const [t, setT] = useState(null)
@@ -104,6 +172,7 @@ function LiveClock() {
     </div>
   )
 }
+
 
 // --------- Node Detail Panel ---------
 function NodeDetail({ node, onClose }) {
@@ -147,6 +216,10 @@ function App() {
   const [center, setCenter] = useState({ x: 960, y: 450 })
   const [dragging, setDragging] = useState(null)
   const [highlightedCard, setHighlightedCard] = useState(null)
+  const [sessionId, setSessionId] = useState(null)
+  const [messages, setMessages] = useState([
+    { role: 'jarvis', text: 'Hello, I am Jarvis. I remember our conversation and I am ready to continue.' },
+  ])
   const dragOffset = useRef({ dx: 0, dy: 0 })
 
   const intensityRef = useRef(0)
@@ -160,6 +233,37 @@ function App() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const storedSessionId = window.sessionStorage.getItem('jarvisSessionId')
+    const storedMessages = window.localStorage.getItem('jarvisConversation')
+    if (storedSessionId) {
+      setSessionId(storedSessionId)
+    }
+    if (storedMessages) {
+      try {
+        const parsed = JSON.parse(storedMessages)
+        if (Array.isArray(parsed) && parsed.every((item) => item && ['user', 'jarvis'].includes(item.role) && typeof item.text === 'string')) {
+          setMessages(parsed)
+        }
+      } catch (error) {
+        // ignore invalid local storage data
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('jarvisConversation', JSON.stringify(messages))
+  }, [messages])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (sessionId) {
+      window.sessionStorage.setItem('jarvisSessionId', sessionId)
+    }
+  }, [sessionId])
 
   // Ambient random flashes (live nodes)
   useEffect(() => {
@@ -215,10 +319,11 @@ function App() {
       <div className="absolute inset-0">
         <Constellation3D onNodeClick={handleNodeClick} intensityRef={intensityRef} flashesRef={flashesRef} />
       </div>
+      <CoreOverlay />
 
       {/* TOP LEFT */}
       <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.7 }} className="absolute top-6 left-6 z-30">
-        <div className="font-display text-2xl md:text-3xl font-bold text-cyan-300 text-glow tracking-[0.35em]">R.A.D.A.R.</div>
+        <div className="font-display text-2xl md:text-3xl font-bold text-cyan-300 text-glow tracking-[0.35em]">Jarvis</div>
         <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-cyan-400/80">
           <span className="relative inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 text-emerald-400 ping-dot" />
           <span>System Online</span>
@@ -231,9 +336,9 @@ function App() {
       {/* TOP RIGHT */}
       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.7, delay: 0.1 }} className="absolute top-6 right-6 z-30 flex flex-col items-end gap-3">
         <div className="flex flex-wrap justify-end gap-2">
-          <div className="corner-brackets bg-red-500/10 border border-red-500/70 glow-red px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-red-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ Overnight Summary ]</div>
-          <div className="corner-brackets bg-amber-500/10 border border-amber-400/70 glow-amber px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-amber-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ Automation Active ]</div>
-          <div className="corner-brackets bg-cyan-500/10 border border-cyan-400/70 glow-cyan px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-cyan-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ Uplink Secure ]</div>
+          <div className="corner-brackets bg-red-500/10 border border-red-500/70 glow-red px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-red-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ JARVIS ACTIVE ]</div>
+          <div className="corner-brackets bg-amber-500/10 border border-amber-400/70 glow-amber px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-amber-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ AUTOMATION READY ]</div>
+          <div className="corner-brackets bg-cyan-500/10 border border-cyan-400/70 glow-cyan px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-cyan-300 font-display"><span className="cb-tr" /><span className="cb-bl" />[ UPLINK SECURE ]</div>
         </div>
         <LiveClock />
       </motion.div>
@@ -260,7 +365,17 @@ function App() {
         intensityRef={intensityRef}
         flashesRef={flashesRef}
         onCardHighlight={setHighlightedCard}
+        history={messages}
+        sessionId={sessionId}
+        onSessionId={setSessionId}
+        onAddMessage={(msg) => setMessages((prev) => [...prev, msg])}
       />
+
+      <SideDock />
+      <BottomStatus />
+      <motion.div className="absolute top-32 left-6 z-30">
+        <ListeningBanner />
+      </motion.div>
 
       {/* Node detail panel */}
       <AnimatePresence>

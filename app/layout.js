@@ -2,8 +2,8 @@ import './globals.css'
 import { Providers } from './providers'
 
 export const metadata = {
-  title: 'R.A.D.A.R. — Command Center',
-  description: 'Futuristic AI operating interface',
+  title: 'Jarvis — Command Center',
+  description: 'Jarvis AI operating interface',
 }
 
 export default function RootLayout({ children }) {

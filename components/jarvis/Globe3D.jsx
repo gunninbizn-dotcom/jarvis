@@ -17,6 +17,10 @@ export default function Globe3D() {
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100)
     camera.position.set(0, 0, 3.6)
 
+    const existingCanvas = mount.querySelector('canvas')
+    if (existingCanvas) {
+      existingCanvas.remove()
+    }
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
     renderer.setSize(width, height)
@@ -141,6 +145,9 @@ export default function Globe3D() {
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      try {
+        renderer.forceContextLoss()
+      } catch {}
       renderer.dispose()
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }

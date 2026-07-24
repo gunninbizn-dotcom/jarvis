@@ -1,320 +1,637 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mic, Volume2, Power, VolumeX } from 'lucide-react'
+import { Power, VolumeX, Settings } from 'lucide-react'
+import { isPiperAvailable, speakPiper, stopPiper } from '@/lib/piper'
+import { startWakeWordDetection, isWakeWordServerAvailable, startWakeWordServerDetection } from '@/lib/wakeword'
 
-// Greeting segments — each segment plays sequentially, may highlight a card
-const GREETING = [
-  { text: 'Good morning, sir. Systems back online.', card: null },
-  { text: 'While you slept, I kept everything running.', card: null },
-  { text: 'Overnight, 1,142 people visited your website.', card: 'visits', keyword: '1,142' },
-  { text: 'Your automation handled 206 conversations without hesitation.', card: 'conversations', keyword: '206' },
-  { text: '19 inappropriate comments were auto-filtered.', card: 'filtered', keyword: '19' },
-  { text: 'I detected four high-intent leads with an estimated revenue opportunity of $1,710 in the next 24 hours.', card: 'revenue', keyword: '$1,710' },
-  { text: 'All subsystems nominal. I am standing by for your directive.', card: null },
+const PREFERRED_VOICES = [
+  /daniel/i, /arthur/i, /oliver/i, /george/i, /english \(uk\)/i, /en-gb/i,
+  /alex/i, /samantha/i, /google us english/i,
 ]
 
 function pickVoice() {
   if (typeof window === 'undefined' || !window.speechSynthesis) return null
   const voices = window.speechSynthesis.getVoices()
   if (!voices || voices.length === 0) return null
-  const preferred = [
-    /daniel/i, /arthur/i, /oliver/i, /george/i, /english \(uk\)/i, /en-gb/i,
-    /alex/i, /samantha/i, /google us english/i,
-  ]
-  for (const p of preferred) {
-    const v = voices.find(v => p.test(v.name + ' ' + v.lang))
-    if (v) return v
+  for (const pattern of PREFERRED_VOICES) {
+    const match = voices.find((voice) => pattern.test(`${voice.name} ${voice.lang}`))
+    if (match) return match
   }
   return voices[0]
 }
 
-// ------- Listening Visualizer Bars -------
+function getAudioLevel(analyser) {
+  if (!analyser) return 0
+  const data = new Uint8Array(analyser.fftSize)
+  analyser.getByteTimeDomainData(data)
+  let sum = 0
+  for (let i = 0; i < data.length; i++) {
+    const value = (data[i] - 128) / 128
+    sum += value * value
+  }
+  return Math.min(1, Math.sqrt(sum / data.length) * 2)
+}
+
 function VisualizerBars({ mode }) {
-  const bars = useMemo(() => Array.from({ length: 16 }, (_, index) => ({
-    delay: (index % 6) * 0.08 + index * 0.025,
-    duration: 0.8 + (index % 4) * 0.05,
-  })), [])
+  const bars = useMemo(
+    () => Array.from({ length: 18 }, (_, index) => ({
+      delay: (index % 6) * 0.06 + index * 0.01,
+      duration: 0.7 + (index % 4) * 0.04,
+    })),
+    []
+  )
   const color = mode === 'speaking' ? '#00f0ff' : mode === 'listening' ? '#ff2a5f' : '#0891b2'
+
   return (
-    <div className={`visualizer-bars ${mode}`} style={{ '--visualizer-color': color }}>
+    <div className="visualizer-bars" style={{ '--visualizer-color': color }}>
       {bars.map((bar, i) => (
-        <div key={i} className="visualizer-bar"
-          style={{
-            animationDelay: `${bar.delay}s`,
-            animationDuration: `${bar.duration}s`,
-          }} />
+        <div
+          key={i}
+          className="visualizer-bar"
+          style={{ animationDelay: `${bar.delay}s`, animationDuration: `${mode === 'idle' ? 1.6 : bar.duration}s` }}
+        />
       ))}
     </div>
   )
 }
 
-export default function VoiceController({ intensityRef, flashesRef, onCardHighlight, onSpeakEnd }) {
-  const [unmuted, setUnmuted] = useState(false)
-  const [mode, setMode] = useState('idle') // 'idle' | 'speaking' | 'listening' | 'processing'
-  const [subtitle, setSubtitle] = useState('')
-  const [voiceReady, setVoiceReady] = useState(false)
-  const modeRef = useRef('idle')
-  const stoppedRef = useRef(false)
-  const recRef = useRef(null)
+export default function VoiceController({ intensityRef, flashesRef, onCardHighlight, history = [], sessionId, onSessionId, onAddMessage }) {
+  const [active, setActive] = useState(false)
+  const [mode, setMode] = useState('idle')
+  const [subtitle, setSubtitle] = useState("Say 'Open Jarvis' to activate.")
+  const [micSupported, setMicSupported] = useState(true)
+  const [recognitionError, setRecognitionError] = useState(null)
+  const [speechReady, setSpeechReady] = useState(false)
+  const [speechError, setSpeechError] = useState(null)
+
+  const recognitionRef = useRef(null)
+  const audioContextRef = useRef(null)
+  const analyserRef = useRef(null)
+  const micStreamRef = useRef(null)
+  const speakingRef = useRef(false)
+  const shouldListenRef = useRef(false)
   const sidRef = useRef(null)
-  const decayRafRef = useRef(null)
+  const rafRef = useRef(null)
+  const usePiperRef = useRef(false)
+  const [speechRate, setSpeechRate] = useState(1.0)
+  const [ttsEngine, setTtsEngine] = useState('browser')
+  const [wakeWordActive, setWakeWordActive] = useState(false)
+  const wakeWordDetectorRef = useRef(null)
 
-  useEffect(() => { modeRef.current = mode }, [mode])
-
-  // Load voices
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return
-    const check = () => { setVoiceReady(true) }
-    check()
-    window.speechSynthesis.onvoiceschanged = check
-    return () => { if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null }
+    if (typeof window === 'undefined') return
+    setMicSupported(!!(window.SpeechRecognition || window.webkitSpeechRecognition))
+    // Check if Piper TTS is available
+    isPiperAvailable().then((available) => {
+      usePiperRef.current = available
+      setTtsEngine(available ? 'piper' : 'browser')
+    })
+    // Start wake word detection
+    startWakeWordDetection(() => {
+      if (!active) {
+        setWakeWordActive(true)
+        setSubtitle('Wake word detected. Activating...')
+        handleActivate()
+      }
+    })
   }, [])
 
-  // Intensity decay loop — always running to smoothly relax intensity
   useEffect(() => {
-    const step = () => {
-      const target = modeRef.current === 'speaking' ? 0.45
-        : modeRef.current === 'listening' ? 0.30
-        : 0
-      const cur = intensityRef.current || 0
-      const next = cur + (target - cur) * 0.06
+    const update = () => {
+      const level = getAudioLevel(analyserRef.current)
+      const base = speakingRef.current ? 0.6 : mode === 'listening' ? 0.4 : 0.08
+      const next = Math.min(1, Math.max(level, base))
       intensityRef.current = next
-      decayRafRef.current = requestAnimationFrame(step)
+      rafRef.current = requestAnimationFrame(update)
     }
-    decayRafRef.current = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(decayRafRef.current)
-  }, [intensityRef])
+    rafRef.current = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [mode, intensityRef])
 
-  // ------ Core speak helper ------
-  const speak = (text, opts = {}) => new Promise((resolve) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) { resolve(); return }
-    try { window.speechSynthesis.cancel() } catch {}
-    const u = new SpeechSynthesisUtterance(text)
-    u.pitch = 0.95
-    u.rate = 1.05
-    u.volume = 1
-    const v = pickVoice(); if (v) u.voice = v
-
-    let boundaryFired = false
-    let fallbackTimer = null
-    const totalDur = Math.max(1200, text.length * 55)
-    const startAt = performance.now()
-    const prefix = opts.prefix || ''
-
-    u.onstart = () => {
-      setMode('speaking')
-      // trigger initial burst
-      intensityRef.current = Math.min(1, (intensityRef.current || 0) + 0.5)
-    }
-    u.onboundary = (e) => {
-      boundaryFired = true
-      if (e.name === 'word' || e.name === 'sentence' || !e.name) {
-        const idx = (e.charIndex || 0) + (e.charLength || 0)
-        setSubtitle(prefix + text.slice(0, idx))
-        // pulse intensity on each word
-        intensityRef.current = Math.min(1, (intensityRef.current || 0) + 0.25)
-        // keyword flash for card highlight is handled by segment prewarming
-      }
-    }
-    // Fallback progressive reveal (some browsers don't fire boundary reliably)
-    fallbackTimer = setInterval(() => {
-      if (boundaryFired) return
-      const p = Math.min(1, (performance.now() - startAt) / totalDur)
-      setSubtitle(prefix + text.slice(0, Math.floor(p * text.length)))
-      // Also pulse intensity mildly
-      if (Math.random() < 0.35) intensityRef.current = Math.min(1, (intensityRef.current || 0) + 0.12)
-    }, 60)
-    u.onend = () => {
-      if (fallbackTimer) clearInterval(fallbackTimer)
-      setSubtitle(prefix + text)
-      resolve()
-    }
-    u.onerror = () => {
-      if (fallbackTimer) clearInterval(fallbackTimer)
-      resolve()
-    }
-    window.speechSynthesis.speak(u)
-  })
-
-  // Trigger a set of random constellation flashes
-  const triggerFlashes = (count = 4, color = 0x00f0ff) => {
-    if (!flashesRef?.current) return
-    for (let i = 0; i < count; i++) {
-      flashesRef.current.push({
-        index: Math.floor(Math.random() * 280),
-        startTime: performance.now() + i * 60,
-        duration: 1600,
-        color,
-        size: 0.4 + Math.random() * 0.3,
-      })
+  const stopRecognition = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort() } catch {}
+      recognitionRef.current = null
     }
   }
 
-  // ------ Continuous listen ------
-  const startListen = () => new Promise((resolve) => {
-    if (typeof window === 'undefined') { resolve(''); return }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { resolve('__NOSR__'); return }
-    try { window.speechSynthesis?.cancel() } catch {}
-    const rec = new SR()
-    rec.lang = 'en-US'
-    rec.interimResults = true
-    rec.continuous = false
-    recRef.current = rec
-    let finalText = ''
-    let started = false
-    let startTimer = null
+  const cleanupAudio = () => {
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop())
+      micStreamRef.current = null
+    }
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close() } catch {}
+      audioContextRef.current = null
+    }
+    analyserRef.current = null
+  }
 
-    rec.onstart = () => {
-      started = true
-      if (startTimer) clearTimeout(startTimer)
-      setMode('listening')
+  const requestMicPermission = async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone not available')
     }
-    rec.onresult = (e) => {
-      let interim = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i]
-        if (r.isFinal) finalText += r[0].transcript
-        else interim += r[0].transcript
-      }
-      const shown = (finalText || interim).trim()
-      if (shown) setSubtitle('> ' + shown)
-      // Pulse intensity on new speech input detected
-      intensityRef.current = Math.min(1, (intensityRef.current || 0) + 0.15)
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    })
+  }
+
+  const initSpeechSynthesis = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      setSpeechError('Speech synthesis is not supported by this browser.')
+      return false
     }
-    rec.onerror = () => {
-      if (startTimer) clearTimeout(startTimer)
-      resolve('__ERR__')
-    }
-    rec.onend = () => {
-      if (startTimer) clearTimeout(startTimer)
-      resolve((finalText || '').trim())
-    }
+
     try {
-      rec.start()
-      startTimer = setTimeout(() => {
-        if (!started) { try { rec.abort && rec.abort() } catch {}; resolve('__NOPERM__') }
-      }, 1500)
-    } catch { resolve('__ERR__') }
+      const utterance = new SpeechSynthesisUtterance('')
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(utterance)
+      setSpeechReady(true)
+      setSpeechError(null)
+      return true
+    } catch (error) {
+      console.warn('Speech synthesis init failed:', error)
+      setSpeechError('Speech synthesis is blocked or muted. Please unmute your browser.')
+      return false
+    }
+  }
+
+  useEffect(() => {
+    if (sessionId) {
+      sidRef.current = sessionId
+    }
+  }, [sessionId])
+
+  const initAudioAnalyser = async () => {
+    const stream = await requestMicPermission()
+    const context = new (window.AudioContext || window.webkitAudioContext)()
+    const source = context.createMediaStreamSource(stream)
+    const analyser = context.createAnalyser()
+    analyser.fftSize = 512
+    analyser.smoothingTimeConstant = 0.8
+    source.connect(analyser)
+    audioContextRef.current = context
+    analyserRef.current = analyser
+    micStreamRef.current = stream
+  }
+
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const speechQueueRef = useRef([])
+  const activeSpeechUtteranceRef = useRef(null)
+  const streamAbortRef = useRef(null)
+  const pendingSpeechRef = useRef('')
+
+  const pulseVisuals = (count, color) => {
+    if (!flashesRef?.current) return
+    for (let i = 0; i < count; i += 1) {
+      flashesRef.current.push({
+        index: Math.floor(Math.random() * 280),
+        startTime: performance.now() + i * 40,
+        duration: 1100 + Math.random() * 600,
+        color,
+        size: 0.22 + Math.random() * 0.28,
+      })
+    }
+    if (typeof onCardHighlight === 'function') {
+      onCardHighlight('conversations')
+      setTimeout(() => onCardHighlight(null), 900)
+    }
+  }
+
+  const enqueueSpeech = (text) => {
+    if (!text || !text.trim()) return
+
+    // Use Piper TTS if available (preferred), otherwise fall back to SpeechSynthesis
+    if (usePiperRef.current) {
+      speakingRef.current = true
+      setMode('speaking')
+      setSubtitle(text)
+      speakPiper(text, { rate: speechRate })
+        .then(() => {
+          speakingRef.current = false
+          if (active) setMode('idle')
+        })
+        .catch(() => {
+          // Fallback to SpeechSynthesis if Piper fails
+          usePiperRef.current = false
+          setTtsEngine('browser')
+          enqueueSpeech(text)
+        })
+      return
+    }
+
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+    if (!speechReady && !initSpeechSynthesis()) {
+      setSpeechError('Unable to play speech. Please interact with the page and unmute audio.')
+      return
+    }
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.pitch = 1
+    utterance.rate = speechRate
+    utterance.volume = 1
+    const selected = pickVoice()
+    if (selected) utterance.voice = selected
+
+    utterance.onstart = () => {
+      speakingRef.current = true
+      setMode('speaking')
+      setSubtitle(text)
+    }
+
+    utterance.onend = () => {
+      if (speechQueueRef.current.length > 0) {
+        const next = speechQueueRef.current.shift()
+        activeSpeechUtteranceRef.current = next
+        window.speechSynthesis.speak(next)
+      } else {
+        activeSpeechUtteranceRef.current = null
+        speakingRef.current = false
+        if (active) setMode('idle')
+      }
+    }
+
+    utterance.onerror = () => {
+      if (speechQueueRef.current.length > 0) {
+        const next = speechQueueRef.current.shift()
+        activeSpeechUtteranceRef.current = next
+        window.speechSynthesis.speak(next)
+      } else {
+        activeSpeechUtteranceRef.current = null
+        speakingRef.current = false
+        if (active) setMode('idle')
+      }
+    }
+
+    speechQueueRef.current.push(utterance)
+    if (!activeSpeechUtteranceRef.current) {
+      const next = speechQueueRef.current.shift()
+      activeSpeechUtteranceRef.current = next
+      window.speechSynthesis.speak(next)
+    }
+  }
+
+  const stopSpeech = () => {
+    // Stop Piper TTS if active
+    stopPiper()
+    try {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+    } catch {}
+    speakingRef.current = false
+    speechQueueRef.current = []
+    activeSpeechUtteranceRef.current = null
+  }
+
+  const createSpeechRecognition = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) return null
+    const recognizer = new SR()
+    recognizer.lang = 'en-US'
+    recognizer.interimResults = true
+    recognizer.continuous = true
+    recognizer.maxAlternatives = 1
+    return recognizer
+  }
+
+  const startRecognition = () => new Promise(async (resolve) => {
+    if (typeof window === 'undefined') {
+      return resolve('__NOSR__')
+    }
+
+    const recognizer = createSpeechRecognition()
+    if (!recognizer) {
+      return resolve('__NOSR__')
+    }
+
+    recognitionRef.current = recognizer
+    let finalTranscript = ''
+    let interimTranscript = ''
+    let started = false
+    let settled = false
+    let timeoutId
+    let silenceTimer = null
+
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      if (silenceTimer) {
+        clearTimeout(silenceTimer)
+        silenceTimer = null
+      }
+    }
+
+    const settle = (value) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop() } catch {}
+      }
+      recognitionRef.current = null
+      resolve(value)
+    }
+
+    recognizer.onstart = () => {
+      started = true
+      if (speakingRef.current) {
+        stopSpeech()
+      }
+      setMode('listening')
+      setSubtitle('Listening... speak now')
+    }
+
+    recognizer.onresult = (event) => {
+      interimTranscript = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript
+        } else {
+          interimTranscript += result[0].transcript
+        }
+      }
+      const shown = (finalTranscript || interimTranscript).trim()
+      if (shown) {
+        setSubtitle('> ' + shown)
+        intensityRef.current = Math.min(1, Math.max(intensityRef.current || 0, 0.4))
+        // Reset silence timer — speech is being detected
+        if (silenceTimer) clearTimeout(silenceTimer)
+        silenceTimer = setTimeout(() => {
+          if (!settled && started) {
+            const result = (finalTranscript || interimTranscript).trim()
+            if (result) {
+              setSubtitle('Processing...')
+              settle(result)
+            } else {
+              setSubtitle('No speech detected. Try speaking again.')
+              settle('')
+            }
+          }
+        }, 3000)
+      }
+      if (finalTranscript.trim()) {
+        settle(finalTranscript.trim())
+      }
+    }
+
+    recognizer.onspeechend = () => {
+      setSubtitle('Processing speech...')
+    }
+
+    recognizer.onnomatch = () => {
+      setSubtitle('I did not catch that. Please speak clearly.')
+    }
+
+    recognizer.onerror = (event) => {
+      setRecognitionError(event?.error || 'unknown')
+      const err = event?.error || 'unknown'
+      if (err === 'no-speech' || err === 'audio-capture') {
+        setSubtitle('No voice detected. Please check your microphone.')
+      } else {
+        setSubtitle(`Recognition error: ${err}`)
+      }
+      settle('__ERR__')
+    }
+
+    recognizer.onend = () => {
+      if (settled) return
+      const result = (finalTranscript || interimTranscript).trim()
+      if (!result) {
+        setMode('idle')
+      }
+      settle(result)
+    }
+
+    try {
+      recognizer.start()
+    } catch (error) {
+      setSubtitle('Recognition failed to start. Try refreshing.')
+      return settle('__ERR__')
+    }
+
+    timeoutId = setTimeout(() => {
+      if (!started && !settled) {
+        setSubtitle('Microphone access not granted or recognition unavailable.')
+        settle('__NOPERM__')
+      }
+    }, 8000)
   })
 
-  // ------ Main sequence ------
-  const playGreeting = async () => {
-    stoppedRef.current = false
-    setSubtitle('')
-    let accumulated = ''
-    triggerFlashes(6, 0x00f0ff)
-    for (const seg of GREETING) {
-      if (stoppedRef.current) return
-      if (seg.card) {
-        onCardHighlight && onCardHighlight(seg.card)
-        // Card-specific flash color
-        const colorMap = { visits: 0x00f0ff, conversations: 0xffb700, filtered: 0xff2a5f, revenue: 0x00f0ff }
-        triggerFlashes(5, colorMap[seg.card] || 0x00f0ff)
-      } else {
-        onCardHighlight && onCardHighlight(null)
+  const streamChatResponse = async (message) => {
+    try {
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort()
       }
-      await speak(seg.text, { prefix: accumulated })
-      accumulated += seg.text + ' '
-      if (stoppedRef.current) return
+      const controller = new AbortController()
+      streamAbortRef.current = controller
+
+      const res = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, sessionId: sidRef.current, history }),
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        const error = await res.text()
+        throw new Error(error || 'Request failed')
+      }
+
+      const reader = res.body?.getReader()
+      if (!reader) {
+        throw new Error('Stream body unavailable')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let text = ''
+      pendingSpeechRef.current = ''
+      let firstSpeak = false
+
+      const flushSpeech = (force = false) => {
+        const chunk = pendingSpeechRef.current.trim()
+        if (!chunk) return
+        if (force || chunk.length >= 45) {
+          enqueueSpeech(chunk)
+          pendingSpeechRef.current = ''
+          firstSpeak = true
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()
+        for (const line of lines) {
+          if (!line.trim()) continue
+          let payload
+          try {
+            payload = JSON.parse(line)
+          } catch {
+            continue
+          }
+
+          if (payload.sessionId) {
+            sidRef.current = payload.sessionId
+            window.sessionStorage.setItem('jarvisSessionId', payload.sessionId)
+            if (typeof onSessionId === 'function') onSessionId(payload.sessionId)
+          }
+
+          if (payload.delta) {
+            text += payload.delta
+            pendingSpeechRef.current += payload.delta
+            if (!firstSpeak && pendingSpeechRef.current.length >= 22) {
+              flushSpeech(true)
+            } else {
+              flushSpeech(false)
+            }
+          }
+
+          if (payload.done) {
+            flushSpeech(true)
+            return text.trim()
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        try {
+          const payload = JSON.parse(buffer)
+          if (payload.delta) {
+            text += payload.delta
+            pendingSpeechRef.current += payload.delta
+          }
+          if (payload.done) {
+            flushSpeech(true)
+          }
+        } catch {}
+      }
+
+      flushSpeech(true)
+      return text.trim()
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return ''
+      }
+      setSubtitle('Network error. Please check your connection.')
+      return 'I could not reach the assistant. Please check your connection.'
     }
-    onCardHighlight && onCardHighlight(null)
-    if (onSpeakEnd) onSpeakEnd()
-    // Now enter listening loop
-    listenLoop()
   }
 
   const listenLoop = async () => {
-    while (!stoppedRef.current) {
-      setSubtitle('') // Clear before each listen
-      setMode('listening')
-      const result = await startListen()
-      if (stoppedRef.current) return
+    while (active && shouldListenRef.current) {
+      const result = await startRecognition()
+      if (!active || !shouldListenRef.current) break
       if (result === '__NOSR__') {
-        await speak('Voice recognition is unavailable in this browser, sir. Try Chrome or Edge.')
-        setMode('idle'); return
+        setMode('idle')
+        setSubtitle('Speech recognition unavailable. Use Chrome or Edge.')
+        break
       }
       if (result === '__NOPERM__') {
-        await speak('Microphone permission is required, sir. Please enable it and try again.')
-        setMode('idle'); return
+        setMode('idle')
+        setSubtitle('Microphone permission required.')
+        break
       }
-      if (result === '__ERR__' || !result) {
-        // Silence — gentle prompt and loop
-        await new Promise(r => setTimeout(r, 400))
+      if (result === '__ERR__') {
+        setSubtitle('Recognition error. Retrying...')
+        await delay(500)
         continue
       }
-      // Send to /api/chat
-      setMode('processing')
-      setSubtitle('> ' + result)
-      try {
-        const r = await fetch('/api/chat', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: result, sessionId: sidRef.current }),
-        })
-        const d = await r.json()
-        sidRef.current = d.sessionId
-        triggerFlashes(3, 0x00f0ff)
-        await speak(d.reply || 'I did not catch that, sir.')
-      } catch (e) {
-        await speak('Connection to core disrupted, sir.')
+      if (!result) {
+        await delay(300)
+        continue
       }
+
+      setMode('processing')
+      setSubtitle('Processing request...')
+      pulseVisuals(4, 0x00f0ff)
+      if (typeof onAddMessage === 'function') {
+        onAddMessage({ role: 'user', text: result })
+      }
+      const reply = await streamChatResponse(result)
+      if (typeof onAddMessage === 'function') {
+        onAddMessage({ role: 'jarvis', text: reply })
+      }
+      if (!active || !shouldListenRef.current) break
+      setMode('idle')
+      setSubtitle('Ready for your next command.')
+      await delay(300)
     }
   }
 
-  const handleUnmute = async () => {
-    if (unmuted) return
-    setUnmuted(true)
-    // Warm up SpeechSynthesis with a silent utterance (user-gesture requirement)
+  const handleActivate = async () => {
+    if (active) return
+    if (!micSupported) {
+      setSubtitle('Voice recognition not supported in this browser.')
+      return
+    }
+
+    initSpeechSynthesis()
+
     try {
-      const warm = new SpeechSynthesisUtterance(' ')
-      warm.volume = 0
-      window.speechSynthesis.speak(warm)
-    } catch {}
-    await new Promise(r => setTimeout(r, 120))
-    playGreeting()
-  }
+      await initAudioAnalyser()
+    } catch {
+      // Continue even if analyser setup fails, recognition can still work.
+      setSubtitle('Voice ready. Please allow microphone access if prompted.')
+    }
 
-  const handleMute = () => {
-    stoppedRef.current = true
-    try { window.speechSynthesis?.cancel() } catch {}
-    try { recRef.current?.abort && recRef.current.abort() } catch {}
+    const stored = window.sessionStorage.getItem('jarvisSessionId')
+    if (stored) {
+      sidRef.current = stored
+      if (typeof onSessionId === 'function') {
+        onSessionId(stored)
+      }
+    }
+
+    shouldListenRef.current = true
+    setActive(true)
     setMode('idle')
-    setSubtitle('')
-    setUnmuted(false)
-    onCardHighlight && onCardHighlight(null)
+    setSubtitle('Awaiting your voice command...')
+    await delay(300)
+    listenLoop()
   }
 
-  // Modes displayed
-  const modeLabel = {
-    idle: 'STANDBY',
-    speaking: 'SPEAKING',
-    listening: 'LISTENING',
-    processing: 'PROCESSING',
-  }[mode]
-
-  const modeColor = {
-    idle: 'text-cyan-500',
-    speaking: 'text-cyan-300',
-    listening: 'text-red-300',
-    processing: 'text-amber-300',
-  }[mode]
+  const handleDeactivate = () => {
+    shouldListenRef.current = false
+    setActive(false)
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+    }
+    stopRecognition()
+    stopSpeech()
+    cleanupAudio()
+    setMode('idle')
+    setSubtitle('Jarvis deactivated.')
+  }
 
   return (
     <>
-      {/* Subtitle bar (top of bottom UI, above the unmute button) */}
       <AnimatePresence>
-        {unmuted && subtitle && (
+        {subtitle && (
           <motion.div
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
             className="absolute bottom-40 left-1/2 -translate-x-1/2 z-30 w-[min(88vw,1000px)]"
           >
             <div className="corner-brackets bg-black/75 backdrop-blur-md border border-cyan-500/60 px-6 py-3">
               <span className="cb-tr" /><span className="cb-bl" />
               <div className="flex items-baseline gap-3">
-                <span className={`text-[10px] uppercase tracking-[0.3em] font-display shrink-0 ${modeColor}`}>
-                  {modeLabel}
+                <span className={`text-[10px] uppercase tracking-[0.3em] font-display shrink-0 ${mode === 'listening' ? 'text-red-300' : mode === 'speaking' ? 'text-cyan-300' : mode === 'processing' ? 'text-amber-300' : 'text-cyan-500'}`}>
+                  {mode.toUpperCase()}
                 </span>
                 <span className="text-cyan-100 text-base md:text-lg leading-relaxed text-glow-sm caret">{subtitle}</span>
               </div>
@@ -323,35 +640,45 @@ export default function VoiceController({ intensityRef, flashesRef, onCardHighli
         )}
       </AnimatePresence>
 
-      {/* Centered Unmute / Status button */}
+      {speechError && (
+        <div className="absolute bottom-64 left-1/2 -translate-x-1/2 z-40 rounded-3xl border border-red-500/40 bg-black/80 px-5 py-3 text-sm text-red-200 shadow-[0_0_30px_rgba(255,0,0,0.18)]">
+          <div className="font-semibold uppercase tracking-[0.2em] text-red-300">Speech output blocked</div>
+          <div className="mt-1 text-[11px] leading-snug text-red-200">{speechError}</div>
+        </div>
+      )}
+
       <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-3 pointer-events-auto">
-        {unmuted && (
+        {active && (
           <div className="flex items-center gap-4">
             <VisualizerBars mode={mode} />
           </div>
         )}
-        {!unmuted ? (
+        {!active ? (
           <motion.button
-            initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
-            onClick={handleUnmute}
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={handleActivate}
             className="group relative flex items-center gap-3 px-8 py-3 border-2 border-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 font-display text-sm md:text-base tracking-[0.35em] font-bold uppercase glow-cyan corner-brackets"
           >
             <span className="cb-tr" /><span className="cb-bl" />
             <Power className="w-4 h-4" />
-            <span className="text-glow-sm">Unmute · Start System</span>
-            <span className="relative inline-block w-2 h-2 rounded-full bg-emerald-400 text-emerald-400 ping-dot" />
+            <span className="text-glow-sm">Activate Jarvis</span>
+            <span className="relative inline-block w-2 h-2 rounded-full bg-emerald-400 ping-dot" />
           </motion.button>
         ) : (
           <motion.button
-            initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
-            onClick={handleMute}
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={handleDeactivate}
             className="group relative flex items-center gap-3 px-6 py-2 border-2 border-red-500 bg-red-500/10 hover:bg-red-500/20 text-red-200 font-display text-sm tracking-[0.35em] font-bold uppercase glow-red corner-brackets"
           >
             <span className="cb-tr" /><span className="cb-bl" />
             <VolumeX className="w-4 h-4" />
-            <span className="text-glow-sm">Mute · Shutdown</span>
+            <span className="text-glow-sm">Deactivate</span>
           </motion.button>
         )}
       </div>

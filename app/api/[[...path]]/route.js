@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import { createGeminiReply, createGeminiStreamReply } from '@/lib/gemini';
+import { manageContextWindow, searchMemories, injectMemories } from '@/lib/memory';
+import { classifyIntent } from '@/lib/intents';
 
 const uri = process.env.MONGO_URL;
 const dbName = process.env.DB_NAME || 'jarvis_db';
@@ -33,55 +36,72 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-// Local JARVIS response engine (rule-based mock — smart & witty)
-function jarvisRespond(input) {
-  const q = (input || '').toLowerCase().trim();
-  const now = new Date();
-  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-
-  const canned = [
-    { match: [/hello|hi|hey|greetings/], reply: `Good to see you online, Sir. Local time is ${time}. All systems nominal.` },
-    { match: [/who are you|what are you|your name/], reply: 'I am J.A.R.V.I.S. — Just A Rather Very Intelligent System. Your personal digital assistant.' },
-    { match: [/status|diagnostic|system/], reply: 'Running full system diagnostic... CPU 42%, Memory 61%, Network 1.2 Gb/s. All subsystems operating within nominal parameters.' },
-    { match: [/weather/], reply: 'Weather in Malibu: 72°F, clear skies, 6 mph westerly wind. A pleasant afternoon for a flight test, Sir.' },
-    { match: [/time|clock/], reply: `Current time is ${time}. Would you like me to schedule anything?` },
-    { match: [/joke|funny/], reply: 'I would tell you a UDP joke, but you might not get it.' },
-    { match: [/thank/], reply: 'Always a pleasure, Sir.' },
-    { match: [/who is tony|iron man|stark/], reply: 'Anthony Edward Stark. Genius. Billionaire. Playboy. Philanthropist. And, occasionally, my employer.' },
-    { match: [/power|reactor|arc/], reply: 'Arc reactor output stable at 8 gigajoules per second. Palladium levels within safe threshold.' },
-    { match: [/scan|threat|radar/], reply: 'Scanning perimeter... 3 civilian signatures detected. No hostile signals in range. Airspace clear.' },
-    { match: [/shut ?down|bye|goodbye/], reply: 'Standing by. I will be here when you need me, Sir.' },
-    { match: [/launch|initiate|activate/], reply: 'Sequence initiated. Confirmation code accepted. Standing by for further orders.' },
-    { match: [/help|command/], reply: 'You may ask for: status, weather, radar scan, arc reactor levels, current time, or issue any command. I will do my best to comply.' },
-  ];
-
-  for (const c of canned) {
-    if (c.match.some(r => r.test(q))) return c.reply;
+/**
+ * Persist a conversation turn to MongoDB (if configured).
+ * @param {string} sessionId
+ * @param {string} user
+ * @param {string} jarvis
+ */
+async function logConversation(sessionId, user, jarvis) {
+  if (!clientPromise) return;
+  try {
+    const db = await getDb();
+    await db.collection('jarvis_logs').insertOne({
+      id: uuidv4(),
+      sessionId,
+      user,
+      jarvis,
+      ts: new Date(),
+    });
+  } catch {
+    // ignore logging failures
   }
+}
 
-  // Default witty reply
-  const witty = [
-    `Processing query: "${input}". Cross-referencing 14.2 million records. I am unable to find a precise answer, but I remain at your service.`,
-    `An interesting query, Sir. My analysis suggests further clarification would yield superior results.`,
-    `Query logged. Would you like me to elaborate or run a deep-scan?`,
-    `I have parsed your input. Might I suggest rephrasing for optimal results?`,
-  ];
-  return witty[Math.floor(Math.random() * witty.length)];
+/**
+ * Fetch relevant memories and build memory context for the Gemini request.
+ * - Manages the context window (trims oldest history first)
+ * - Searches past conversations for relevant memories
+ * - Injects relevant memories into the system prompt
+ *
+ * @param {string} message — current user message
+ * @param {Array<{role:string,text:string}>} history — conversation history
+ * @returns {Promise<{history:Array, systemPromptOverride:string|null, memories:Array}>}
+ */
+async function getMemoryContext(message, history) {
+  const trimmedHistory = manageContextWindow(history || []);
+  if (!clientPromise) {
+    return { history: trimmedHistory, systemPromptOverride: null, memories: [] };
+  }
+  try {
+    const db = await getDb();
+    const logs = await db
+      .collection('jarvis_logs')
+      .find({})
+      .sort({ ts: -1 })
+      .limit(100)
+      .toArray();
+    const relevantMemories = searchMemories(logs, message);
+    const systemPromptOverride = injectMemories('', relevantMemories);
+    return { history: trimmedHistory, systemPromptOverride, memories: relevantMemories };
+  } catch {
+    return { history: trimmedHistory, systemPromptOverride: null, memories: [] };
+  }
 }
 
 export const runtime = 'nodejs';
 
 export async function GET(request, { params }) {
-  const p = params?.path ?? [];
+  const { path } = await params;
+  const p = path ?? [];
   const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
     if (!route) {
-      return NextResponse.json({ message: 'JARVIS backend online', version: '1.0.0' }, { headers: CORS });
+      return NextResponse.json({ message: 'JARVIS backend online', version: '2.0.0' }, { headers: CORS });
     }
 
     if (route === 'status') {
-      // Simulated system telemetry
       const telemetry = {
         cpu: 30 + Math.random() * 50,
         memory: 40 + Math.random() * 30,
@@ -112,12 +132,12 @@ export async function GET(request, { params }) {
 }
 
 export async function POST(request, { params }) {
-  const p = params?.path ?? [];
+  const { path } = await params;
+  const p = path ?? [];
   const route = Array.isArray(p) ? p.join('/') : (p ? String(p) : '');
 
   try {
     let body = {};
-
     try {
       body = await request.json();
     } catch {
@@ -125,22 +145,128 @@ export async function POST(request, { params }) {
     }
 
     if (route === 'chat') {
-      const { message, sessionId } = body;
-      const sid = sessionId || uuidv4();
-      const reply = jarvisRespond(message);
-
-      if (clientPromise) {
-        const db = await getDb();
-        await db.collection('jarvis_logs').insertOne({
-          id: uuidv4(),
-          sessionId: sid,
-          user: message,
-          jarvis: reply,
-          ts: new Date(),
-        });
+      const { message, sessionId, history } = body;
+      if (!message || typeof message !== 'string') {
+        return NextResponse.json({ error: 'Invalid message payload' }, { status: 400, headers: CORS });
       }
 
-      return NextResponse.json({ reply, sessionId: sid, timestamp: new Date().toISOString() }, { headers: CORS });
+      if (!process.env.GEMINI_API_KEY) {
+        return NextResponse.json(
+          { error: 'GEMINI_API_KEY is missing. Please set GEMINI_API_KEY in your .env.local.' },
+          { status: 400, headers: CORS }
+        );
+      }
+
+      const sid = sessionId || uuidv4();
+
+      try {
+        const { history: trimmedHistory, systemPromptOverride } = await getMemoryContext(message, history);
+        const reply = await createGeminiReply(trimmedHistory, message, systemPromptOverride);
+        await logConversation(sid, message, reply);
+        return NextResponse.json({ reply, sessionId: sid, timestamp: new Date().toISOString() }, { headers: CORS });
+      } catch (error) {
+        return NextResponse.json(
+          { error: error.message, sessionId: sid },
+          { status: 500, headers: CORS }
+        );
+      }
+    }
+
+    if (route === 'intent/classify') {
+      const { message } = body;
+      if (!message || typeof message !== 'string') {
+        return NextResponse.json({ error: 'Invalid message payload' }, { status: 400, headers: CORS });
+      }
+      const result = classifyIntent(message);
+      return NextResponse.json({ ...result, message }, { headers: CORS });
+    }
+
+    if (route === 'memory/search') {
+      const { query } = body;
+      if (!clientPromise) {
+        return NextResponse.json({ results: [] }, { headers: CORS });
+      }
+      try {
+        const db = await getDb();
+        const logs = await db.collection('jarvis_logs').find({}).sort({ ts: -1 }).limit(100).toArray();
+        const results = searchMemories(logs, query || '');
+        return NextResponse.json({ results: results.map(r => ({ ...r, _id: undefined })) }, { headers: CORS });
+      } catch (error) {
+        return NextResponse.json({ error: error.message, results: [] }, { status: 500, headers: CORS });
+      }
+    }
+
+    if (route === 'chat/stream') {
+      const { message, sessionId, history } = body;
+      if (!message || typeof message !== 'string') {
+        return NextResponse.json({ error: 'Invalid message payload' }, { status: 400, headers: CORS });
+      }
+
+      if (!process.env.GEMINI_API_KEY) {
+        return NextResponse.json(
+          { error: 'GEMINI_API_KEY is missing. Please set GEMINI_API_KEY in your .env.local.' },
+          { status: 400, headers: CORS }
+        );
+      }
+
+      const sid = sessionId || uuidv4();
+
+      try {
+        const { history: trimmedHistory, systemPromptOverride } = await getMemoryContext(message, history);
+        const stream = await createGeminiStreamReply(trimmedHistory, message, sid, systemPromptOverride);
+
+        // Wrap the stream to log the conversation after it completes
+        const loggedStream = new ReadableStream({
+          async start(controller) {
+            const reader = stream.getReader();
+            let assistantText = '';
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                // Capture delta text for logging
+                const chunkStr = new TextDecoder().decode(value);
+                try {
+                  const parsed = JSON.parse(chunkStr.trim());
+                  if (parsed.delta) {
+                    assistantText += parsed.delta;
+                  }
+                } catch {
+                  // ignore non-JSON chunks
+                }
+
+                controller.enqueue(value);
+              }
+
+              controller.close();
+            } catch (error) {
+              controller.error(error);
+            } finally {
+              await logConversation(sid, message, assistantText);
+            }
+          },
+          cancel() {
+            stream.cancel().catch(() => {});
+          },
+        });
+
+        return new Response(loggedStream, {
+          status: 200,
+          headers: {
+            ...CORS,
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
+          },
+        });
+      } catch (error) {
+        return NextResponse.json(
+          { error: error.message, sessionId: sid },
+          { status: 500, headers: CORS }
+        );
+      }
     }
 
     return NextResponse.json({ error: 'Route not found' }, { status: 404, headers: CORS });
